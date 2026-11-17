@@ -1,13 +1,13 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 19:04:18 +0100
-Subject: [PATCH 27/30] gdb/remote: record the thread of the initial stop for
+Subject: [PATCH 34/37] gdb/remote: record the thread of the initial stop for
  "info program"
 
 "info program" was wrong after connecting to a non-stop target.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 3ea2dcde63c..96de073d633 100644
+index 450d9d258d1..423b8782d10 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -5106,6 +5106,7 @@ remote_target::print_one_stopped_thread (thread_info *thread)

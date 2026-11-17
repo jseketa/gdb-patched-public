@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 19:04:17 +0100
-Subject: [PATCH 25/30] gdb/remote: do not mark the async event handler while
+Subject: [PATCH 32/37] gdb/remote: do not mark the async event handler while
  not async
 
 Assertion when connecting to a non-stop target with several stopped threads.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index d6e047ac1b8..8ad4791b88f 100644
+index ecb7227bf0f..ac7b44ecb3d 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
-@@ -8354,11 +8354,12 @@ remote_target::queued_stop_reply (ptid_t ptid)
+@@ -8368,11 +8368,12 @@ remote_target::queued_stop_reply (ptid_t ptid)
    remote_state *rs = get_remote_state ();
    stop_reply_up r = remote_notif_remove_queued_reply (ptid);
  

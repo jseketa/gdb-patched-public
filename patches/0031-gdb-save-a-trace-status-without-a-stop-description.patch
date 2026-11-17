@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 23:30:36 +0100
+Subject: [PATCH 31/37] gdb: save a trace status without a stop description
+
+tsave passed a null stop description to strlen.
+
+diff --git a/gdb/tracefile-tfile.c b/gdb/tracefile-tfile.c
+index 1a74b81e436..c7c336f466a 100644
+--- a/gdb/tracefile-tfile.c
++++ b/gdb/tracefile-tfile.c
+@@ -174,9 +174,11 @@ tfile_write_status (struct trace_file_writer *self,
+   if (ts->stop_reason == tracepoint_error
+       || ts->stop_reason == trace_stop_command)
+     {
+-      char *buf = (char *) alloca (strlen (ts->stop_desc) * 2 + 1);
++      /* A trace stopped by "tstop" may have no description.  */
++      const char *desc = ts->stop_desc != nullptr ? ts->stop_desc : "";
++      char *buf = (char *) alloca (strlen (desc) * 2 + 1);
+ 
+-      bin2hex ((gdb_byte *) ts->stop_desc, buf, strlen (ts->stop_desc));
++      bin2hex ((const gdb_byte *) desc, buf, strlen (desc));
+       fprintf (writer->fp, ":%s", buf);
+     }
+   fprintf (writer->fp, ":%x", ts->stopping_tracepoint);

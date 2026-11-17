@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 21:41:11 +0100
+Subject: [PATCH 27/37] gdb: do not fail a displaced step whose process has
+ exited
+
+If the process exits before the buffer is restored, skip the restore instead of failing with "Cannot access memory".
+
+diff --git a/gdb/displaced-stepping.c b/gdb/displaced-stepping.c
+index caff9aa99fa..69016b91458 100644
+--- a/gdb/displaced-stepping.c
++++ b/gdb/displaced-stepping.c
+@@ -252,9 +252,25 @@ displaced_step_buffers::finish (gdbarch *arch, thread_info *thread,
+ 
+   ULONGEST len = gdbarch_displaced_step_buffer_length (arch);
+ 
+-  /* Restore memory of the buffer.  */
+-  write_memory_ptid (thread->ptid, buffer->addr,
+-		     buffer->saved_copy.data (), len);
++  /* Restore memory of the buffer.  If the process exited while GDB
++     was handling the step, for example because another thread called
++     exit, the write fails: the address space is gone, so there is
++     nothing to restore, and nothing to fix up either.  */
++  try
++    {
++      write_memory_ptid (thread->ptid, buffer->addr,
++			 buffer->saved_copy.data (), len);
++    }
++  catch (const gdb_exception_error &ex)
++    {
++      if (ex.error != MEMORY_ERROR || target_thread_alive (thread->ptid))
++	throw;
++
++      displaced_debug_printf ("%s is gone, not restoring %s",
++			      thread->ptid.to_string ().c_str (),
++			      paddress (arch, buffer->addr));
++      return DISPLACED_STEP_FINISH_STATUS_OK;
++    }
+ 
+   displaced_debug_printf ("restored %s %s",
+ 			  thread->ptid.to_string ().c_str (),

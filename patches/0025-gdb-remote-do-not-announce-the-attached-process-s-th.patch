@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Mon, 9 Nov 2026 17:54:58 +0100
+Subject: [PATCH 25/37] gdb/remote: do not announce the attached process's
+ thread before its symbols
+
+With a non-stop target, add the main thread silently, as all-stop does; attach-deleted-exec.exp failed with target-non-stop on.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index d6e047ac1b8..478d5427f06 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -7071,6 +7071,15 @@ extended_remote_target::attach (const char *args, int from_tty)
+ 
+   if (target_is_non_stop_p ())
+     {
++      /* All-stop adds the main thread silently, below.  Do the same
++	 here, so the user is not told about the thread of the process
++	 that was just attached to, ahead of the "Reading symbols"
++	 lines.  Other threads are announced as they are listed.  */
++      ptid_t curr_ptid = remote_current_thread (ptid_t (pid));
++      if (curr_ptid.pid () == pid && curr_ptid.lwp_p ())
++	remote_add_thread (curr_ptid, THREAD_RUNNING, THREAD_INT_RUNNING,
++			   true);
++
+       /* Get list of threads.  */
+       update_thread_list ();
+ 
