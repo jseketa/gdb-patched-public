@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 3 Nov 2026 20:37:03 +0100
+Subject: [PATCH 03/30] gdb: read a serial's error fd once per input chunk, not
+ per character
+
+Reading stderr after every character cost one read(2) per byte for pipe targets.
+
+diff --git a/gdb/ser-base.c b/gdb/ser-base.c
+index fe84bf03473..ca92d05fc5c 100644
+--- a/gdb/ser-base.c
++++ b/gdb/ser-base.c
+@@ -295,7 +295,24 @@ ser_base_wait_for (struct serial *scb, int timeout)
+ 
+ static constexpr size_t ERROR_FD_READ_MAX = 1024 * 1024;
+ 
+-/* See ser-base.h.  */
++/* See ser-base.h.
++
++   For a pipe, the error fd is the command's stderr.  GDB has to keep
++   reading it while it reads the input: a command that fills it blocks,
++   and then the input GDB is waiting for does not come.  It is read:
++
++   - by handle_error_fd, while the event loop runs;
++
++   - by ser_base_wait_for, while GDB is blocked waiting for input, as
++     in remote.c's readchar, when the event loop does not run;
++
++   - by do_ser_base_readchar, for serials ser_base_wait_for leaves it
++     to, every second of such a wait;
++
++   - by generic_readchar, once for each chunk of input, so that error
++     output written before the chunk is shown before it is used;
++
++   - by pipe_close, once the command has exited, for what is left.  */
+ 
+ void
+ ser_base_read_error_fd (struct serial *scb, int close_fd)
+@@ -420,7 +437,9 @@ do_ser_base_readchar (struct serial *scb, int timeout)
+ 
+       /* We also need to check and consume the stderr because it could
+ 	 come before the stdout for some stubs.  If we just sit and wait
+-	 for stdout, we would hit a deadlock for that case.  */
++	 for stdout, we would hit a deadlock for that case.  This is for
++	 the serials ser_base_wait_for leaves it to; for the others, it
++	 has done it already.  */
+       ser_base_read_error_fd (scb, 0);
+     }
+ 
+@@ -467,6 +486,11 @@ generic_readchar (struct serial *scb, int timeout,
+ 		  int (do_readchar) (struct serial *scb, int timeout))
+ {
+   int ch;
++  /* Whether CH will be the first character of a chunk read from
++     SCB->fd (here or by fd_event), or an error, rather than the next
++     one of a chunk already begun.  */
++  bool chunk_start = scb->bufcnt <= 0 || scb->bufp == scb->buf;
++
+   if (scb->bufcnt > 0)
+     {
+       ch = *scb->bufp;
+@@ -497,8 +521,14 @@ generic_readchar (struct serial *scb, int timeout,
+ 	}
+     }
+ 
+-  /* Read any error output we might have.  */
+-  ser_base_read_error_fd (scb, 1);
++  /* Read any error output we might have: once a chunk, when its
++     first character is taken, so that error output written before
++     the chunk's data is shown before any of that data is used.  Not
++     for every character: for a pipe, whose ops have no avail, each
++     call is a read on SCB->error_fd that nearly always fails with
++     EAGAIN, and a large reply made one such call per byte.  */
++  if (chunk_start)
++    ser_base_read_error_fd (scb, 1);
+ 
+   reschedule (scb);
+   return ch;

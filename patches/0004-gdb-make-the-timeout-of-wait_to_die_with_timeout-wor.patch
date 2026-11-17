@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 6 Nov 2026 10:27:07 +0100
+Subject: [PATCH 04/30] gdb: make the timeout of wait_to_die_with_timeout work
+ again
+
+gdb::waitpid retries the EINTR from SIGALRM (a9791f1438a), so a pipe command that does not exit hung GDB.
+
+diff --git a/gdb/utils.c b/gdb/utils.c
+index aa3f4d7ded4..d42de239425 100644
+--- a/gdb/utils.c
++++ b/gdb/utils.c
+@@ -3338,7 +3338,9 @@ wait_to_die_with_timeout (pid_t pid, int *status, int timeout)
+       alarm (timeout);
+ #endif
+ 
+-      waitpid_result = gdb::waitpid (pid, status, 0);
++      /* Not gdb::waitpid: it retries on EINTR, and SIGALRM interrupting
++	 this call is what ends the wait.  */
++      waitpid_result = ::waitpid (pid, status, 0);
+ 
+ #ifdef SIGALRM
+       alarm (0);

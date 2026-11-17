@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 04:17:49 +0100
+Subject: [PATCH 09/30] gdbserver: wait for all threads once the stepping
+ thread has exited
+
+The filtered wait reported NO_RESUMED and the process exit was never reported.
+
+diff --git a/gdbserver/linux-low.cc b/gdbserver/linux-low.cc
+index 6106e16fdb9..d57bacdc4e0 100644
+--- a/gdbserver/linux-low.cc
++++ b/gdbserver/linux-low.cc
+@@ -3044,6 +3044,12 @@ linux_process_target::wait_1 (ptid_t ptid, target_waitstatus *ourstatus,
+       threads_debug_printf ("step_over_bkpt set [%s], doing a blocking wait",
+ 			    target_pid_to_str (step_over_bkpt).c_str ());
+       pid = wait_for_event (step_over_bkpt, &w, options & ~WNOHANG);
++
++      /* If the stepped thread exited, that finished the step-over.
++	 There is nothing left to wait for in that thread, and the
++	 other threads are what matters now.  */
++      if (pid == -1 && step_over_bkpt == null_ptid)
++	pid = wait_for_event (ptid, &w, options);
+     }
+ 
+   if (pid == 0 || (pid == -1 && !was_any_resumed))

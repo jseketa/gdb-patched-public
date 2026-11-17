@@ -1,0 +1,11 @@
+# gdb-patched-public
+
+Fixes for GDB and gdbserver (remote targets, non-stop, step-overs, pipe targets),
+as one patch series on binutils-gdb master `BASE`.
+
+    git clone https://sourceware.org/git/binutils-gdb.git && cd binutils-gdb
+    git checkout -b patched $(cat ../gdb-patched-public/BASE)
+    git am ../gdb-patched-public/patches/*.patch
+
+Some of these are under review on gdb-patches; the rest are not sent yet.
+The testsuite changes are left out. License: GPL-3.0-or-later, as GDB.

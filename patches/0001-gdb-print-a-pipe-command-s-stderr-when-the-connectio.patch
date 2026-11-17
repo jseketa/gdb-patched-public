@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 4 Nov 2026 22:26:12 +0100
+Subject: [PATCH 01/30] gdb: print a pipe command's stderr when the connection
+ is reset
+
+Since 0da23004a the ECONNRESET throw skips reading stderr, so the command's error message is lost; pipe_close now drains the error fd.
+
+diff --git a/gdb/ser-base.c b/gdb/ser-base.c
+index e9c868898ca..9464165d3a1 100644
+--- a/gdb/ser-base.c
++++ b/gdb/ser-base.c
+@@ -256,9 +256,9 @@ ser_base_wait_for (struct serial *scb, int timeout)
+     }
+ }
+ 
+-/* Read any error output we might have.  */
++/* See ser-base.h.  */
+ 
+-static void
++void
+ ser_base_read_error_fd (struct serial *scb, int close_fd)
+ {
+   if (scb->error_fd != -1)
+diff --git a/gdb/ser-base.h b/gdb/ser-base.h
+index 667df4e3dae..87ea9f5242b 100644
+--- a/gdb/ser-base.h
++++ b/gdb/ser-base.h
+@@ -25,6 +25,11 @@
+ struct serial;
+ struct ui_file;
+ 
++/* Read any error output we might have on SCB's error fd, and print
++   it.  If CLOSE_FD, close the error fd at end of file.  */
++
++extern void ser_base_read_error_fd (struct serial *scb, int close_fd);
++
+ extern int generic_readchar (struct serial *scb, int timeout,
+ 			     int (*do_readchar) (struct serial *scb,
+ 						 int timeout));
+diff --git a/gdb/ser-pipe.c b/gdb/ser-pipe.c
+index 3b755a84860..ff2c2ae1b85 100644
+--- a/gdb/ser-pipe.c
++++ b/gdb/ser-pipe.c
+@@ -185,6 +185,13 @@ pipe_close (struct serial *scb)
+ #endif
+ 	}
+ 
++      /* The command has exited: print what it wrote to stderr and GDB
++	 has not shown yet.  A read error on SCB->fd, e.g. ECONNRESET
++	 when the command exits without reading what GDB sent, throws
++	 before generic_readchar gets to read the error fd, so this
++	 output would otherwise be lost.  */
++      ser_base_read_error_fd (scb, 1);
++
+       if (scb->error_fd != -1)
+ 	close (scb->error_fd);
+       scb->error_fd = -1;

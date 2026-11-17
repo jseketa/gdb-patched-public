@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 01:03:48 +0100
+Subject: [PATCH 16/30] gdb: do not lose a stop reply with an unavailable
+ register
+
+Accept 'x' digits for an expedited register in a stop reply.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 80af699b734..e25a20ac3db 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -8676,6 +8676,18 @@ Packet: '%s'\n"),
+ 		  cached_reg.data.resize (reg_size);
+ 
+ 		  p = p1 + 1;
++
++		  /* The value can be unavailable, as in a 'g' reply.  Do
++		     not lose the stop for it: core GDB will fetch this
++		     register if it needs it, and hear about it then.  */
++		  if (*p == 'x')
++		    {
++		      p = strchrnul (p, ';');
++		      if (*p == ';')
++			p++;
++		      continue;
++		    }
++
+ 		  fieldsize = hex2bin (p, cached_reg.data.data (),
+ 				       cached_reg.data.size ());
+ 		  p += 2 * fieldsize;

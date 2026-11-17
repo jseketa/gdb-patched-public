@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 01:03:49 +0100
+Subject: [PATCH 17/30] gdb: do not read moved-from stop replies in
+ discard_pending_stop_replies
+
+Crash with "set debug remote on".
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index e25a20ac3db..88af03078ed 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -8284,13 +8284,15 @@ remote_target::discard_pending_stop_replies (struct inferior *inf)
+ 			      rs->stop_reply_queue.end (),
+ 			      [=] (const stop_reply_up &event)
+ 			      {
+-				return event->ptid.pid () == inf->pid;
++				bool discard = event->ptid.pid () == inf->pid;
++				if (discard)
++				  remote_debug_printf
++				    ("discarding queued stop reply: "
++				     "ptid: %s, ws: %s\n",
++				     event->ptid.to_string ().c_str (),
++				     event->ws.to_string ().c_str ());
++				return discard;
+ 			      });
+-  for (auto it = iter; it != rs->stop_reply_queue.end (); ++it)
+-    remote_debug_printf
+-      ("discarding queued stop reply: ptid: %s, ws: %s\n",
+-       (*it)->ptid.to_string().c_str(),
+-       (*it)->ws.to_string ().c_str ());
+   rs->stop_reply_queue.erase (iter, rs->stop_reply_queue.end ());
+ }
+ 

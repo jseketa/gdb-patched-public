@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 05:17:11 +0100
+Subject: [PATCH 07/30] gdb/remote: tell the stub about "set non-stop" before
+ run and attach
+
+"set non-stop" changed after connecting was never sent to the stub.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index a728d57df6e..132840259b3 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -609,6 +609,10 @@ class remote_state
+      because we allow GDB commands while the target is running.  */
+   bool waiting_for_stop_reply = false;
+ 
++  /* The mode the stub was last told about with QNonStop.  "set
++     non-stop" can change GDB's side of this while connected.  */
++  bool stub_non_stop = false;
++
+   /* The status of the stub support for the various vCont actions.  */
+   vCont_action_support supports_vCont;
+ 
+@@ -1307,6 +1311,14 @@ class remote_target : public process_stratum_target
+ 					   ptid_t ptid);
+   static void open_1 (const char *name, int from_tty, int extended_p);
+   void start_remote (int from_tty, int extended_p);
++
++  /* Tell the stub to be in non-stop mode if ON, else all-stop.  */
++  void set_stub_non_stop (bool on);
++
++  /* Call set_stub_non_stop if the stub's mode is not GDB's, and no
++     program is running on this connection.  */
++  void update_stub_non_stop ();
++
+   void remote_detach_1 (struct inferior *inf, int from_tty);
+ 
+   char *append_resumption (char *p, char *endp,
+@@ -5553,36 +5565,13 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+   if (gdbarch_has_global_solist (current_inferior ()->arch ()))
+     solib_add (NULL, from_tty, auto_solib_add);
+ 
+-  if (target_is_non_stop_p ())
+-    {
+-      if (m_features.packet_support (PACKET_QNonStop) != PACKET_ENABLE)
+-	error (_("Non-stop mode requested, but remote "
+-		 "does not support non-stop"));
+-
+-      putpkt ("QNonStop:1");
+-      getpkt (&rs->buf);
+-
+-      if (!streq (rs->buf.data (), "OK"))
+-	error (_("Remote refused setting non-stop mode with: %s"),
+-	       rs->buf.data ());
++  set_stub_non_stop (target_is_non_stop_p ());
+ 
+-      /* Find about threads and processes the stub is already
+-	 controlling.  We default to adding them in the running state.
+-	 The '?' query below will then tell us about which threads are
+-	 stopped.  */
+-      this->update_thread_list ();
+-    }
+-  else if (m_features.packet_support (PACKET_QNonStop) == PACKET_ENABLE)
+-    {
+-      /* Don't assume that the stub can operate in all-stop mode.
+-	 Request it explicitly.  */
+-      putpkt ("QNonStop:0");
+-      getpkt (&rs->buf);
+-
+-      if (!streq (rs->buf.data (), "OK"))
+-	error (_("Remote refused setting all-stop mode with: %s"),
+-	       rs->buf.data ());
+-    }
++  /* Find about threads and processes the stub is already controlling.
++     We default to adding them in the running state.  The '?' query
++     below will then tell us about which threads are stopped.  */
++  if (target_is_non_stop_p ())
++    this->update_thread_list ();
+ 
+   /* Upload TSVs regardless of whether the target is running or not.  The
+      remote stub, such as GDBserver, may have some predefined or builtin
+@@ -5776,6 +5765,49 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+   return true;
+ }
+ 
++void
++remote_target::set_stub_non_stop (bool on)
++{
++  remote_state *rs = get_remote_state ();
++
++  if (m_features.packet_support (PACKET_QNonStop) != PACKET_ENABLE)
++    {
++      if (on)
++	error (_("Non-stop mode requested, but remote "
++		 "does not support non-stop"));
++
++      /* Don't assume that the stub can operate in all-stop mode, but
++	 if it has no other mode there is nothing to request.  */
++      return;
++    }
++
++  putpkt (on ? "QNonStop:1" : "QNonStop:0");
++  getpkt (&rs->buf);
++
++  if (!streq (rs->buf.data (), "OK"))
++    error (on
++	   ? _("Remote refused setting non-stop mode with: %s")
++	   : _("Remote refused setting all-stop mode with: %s"),
++	   rs->buf.data ());
++
++  rs->stub_non_stop = on;
++}
++
++void
++remote_target::update_stub_non_stop ()
++{
++  if (target_is_non_stop_p () == get_remote_state ()->stub_non_stop)
++    return;
++
++  /* "set non-stop" only checks the current inferior.  Do not switch
++     the stub under a program that is already running on this
++     connection.  */
++  if (number_of_live_inferiors (this) > 0)
++    return;
++
++  set_stub_non_stop (target_is_non_stop_p ());
++}
++
+ /* Start the remote connection and sync state.  */
+ 
+ void
+@@ -7002,6 +7034,9 @@ extended_remote_target::attach (const char *args, int from_tty)
+   if (m_features.packet_support (PACKET_vAttach) == PACKET_DISABLE)
+     error (_("This target does not support attaching to a process"));
+ 
++  /* "set non-stop" may have been used since connecting.  */
++  update_stub_non_stop ();
++
+   target_announce_attach (from_tty, pid);
+ 
+   xsnprintf (rs->buf.data (), get_remote_packet_size (), "vAttach;%x", pid);
+@@ -11451,6 +11486,9 @@ extended_remote_target::create_inferior (const char *exec_file,
+   std::string remote_exec_file
+     = get_exec_file_for_create_inferior (exec_file);
+ 
++  /* "set non-stop" may have been used since connecting.  */
++  update_stub_non_stop ();
++
+   /* If running asynchronously, register the target file descriptor
+      with the event loop.  */
+   if (target_can_async_p ())

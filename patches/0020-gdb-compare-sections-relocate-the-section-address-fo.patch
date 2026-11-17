@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 23:20:44 +0100
+Subject: [PATCH 20/30] gdb: compare-sections: relocate the section address for
+ PIE
+
+compare-sections read unrelocated addresses for a PIE.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 88af03078ed..6b59303b5ec 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -12139,6 +12139,17 @@ compare_sections_command (const char *args, int from_tty)
+       matched = 1;		/* Do this section.  */
+       lma = s->lma;
+ 
++      /* The section table holds the section's address after any
++	 relocation, e.g. the load bias of a PIE.  Apply the same
++	 displacement to the LMA.  */
++      for (const target_section &ts
++	     : current_program_space->target_sections ())
++	if (ts.the_bfd_section == s)
++	  {
++	    lma += ts.addr - bfd_section_vma (s);
++	    break;
++	  }
++
+       gdb::byte_vector sectdata (size);
+       bfd_get_section_contents (current_program_space->exec_bfd (), s,
+ 				sectdata.data (), 0, size);

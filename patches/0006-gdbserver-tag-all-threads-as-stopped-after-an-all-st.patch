@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 6 Nov 2026 15:20:52 +0100
+Subject: [PATCH 06/30] gdbserver: tag all threads as stopped after an all-stop
+ vAttach
+
+Otherwise gdbserver can resume attached threads that GDB believes are stopped.
+
+diff --git a/gdbserver/server.cc b/gdbserver/server.cc
+index 74774fcde7c..90307c38b50 100644
+--- a/gdbserver/server.cc
++++ b/gdbserver/server.cc
+@@ -3377,7 +3377,15 @@ handle_v_attach (char *own_buf)
+ 	      write_ok (own_buf);
+ 	    }
+ 	  else
+-	    prepare_resume_reply (own_buf, cs.last_ptid, cs.last_status);
++	    {
++	      /* All-stop mode always stops all threads implicitly.  Tag
++		 them all as "want-stopped", not only the one
++		 attach_inferior tagged, or they look like running threads
++		 to resume_stopped_resumed_lwps, which would resume them
++		 without the client telling us to.  */
++	      gdb_wants_all_threads_stopped ();
++	      prepare_resume_reply (own_buf, cs.last_ptid, cs.last_status);
++	    }
+ 	}
+       else
+ 	{

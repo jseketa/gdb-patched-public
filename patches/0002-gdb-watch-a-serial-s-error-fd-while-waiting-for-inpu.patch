@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 6 Nov 2026 09:12:11 +0100
+Subject: [PATCH 02/30] gdb: watch a serial's error fd while waiting for input
+
+ser_base_wait_for also waits on the error fd, so a pipe command that fills its stderr no longer costs a second per full socket.
+
+diff --git a/gdb/ser-base.c b/gdb/ser-base.c
+index 9464165d3a1..fe84bf03473 100644
+--- a/gdb/ser-base.c
++++ b/gdb/ser-base.c
+@@ -24,6 +24,7 @@
+ 
+ #include "gdbsupport/gdb_select.h"
+ #include "gdbsupport/gdb_sys_time.h"
++#include <chrono>
+ #ifdef USE_WIN32API
+ #include <winsock2.h>
+ #endif
+@@ -204,7 +205,9 @@ push_event (void *context)
+ }
+ 
+ /* Wait for input on scb, with timeout seconds.  Returns 0 on success,
+-   otherwise SERIAL_TIMEOUT or SERIAL_ERROR.  */
++   otherwise SERIAL_TIMEOUT or SERIAL_ERROR.  Error output that arrives
++   meanwhile is printed at once: the remote may be blocked writing it,
++   and then the input would never come.  */
+ 
+ /* NOTE: Some of the code below is dead.  The only possible values of
+    the TIMEOUT parameter are ONE and ZERO.  OTOH, we should probably
+@@ -214,28 +217,43 @@ push_event (void *context)
+ static int
+ ser_base_wait_for (struct serial *scb, int timeout)
+ {
++  /* Error output must not extend the timeout.  */
++  const auto deadline = (std::chrono::steady_clock::now ()
++			 + std::chrono::seconds (timeout));
++
+   while (1)
+     {
+       int numfds;
+       struct timeval tv;
+       fd_set readfds, exceptfds;
+       int nfds;
++      /* Serials with an "avail" method may not be able to select on the
++	 error fd, and it may be too large for an fd_set.  The wait in
++	 do_ser_base_readchar drains it then.  */
++      int error_fd = (scb->ops->avail == nullptr && scb->error_fd < FD_SETSIZE
++		      ? scb->error_fd : -1);
+ 
+       /* NOTE: Some OS's can scramble the READFDS when the select()
+ 	 call fails (ex the kernel with Red Hat 5.2).  Initialize all
+ 	 arguments before each call.  */
+ 
+-      tv.tv_sec = timeout;
+-      tv.tv_usec = 0;
++      auto left = std::chrono::duration_cast<std::chrono::microseconds>
++	(deadline - std::chrono::steady_clock::now ()).count ();
++      if (left < 0)
++	left = 0;
++      tv.tv_sec = left / 1000000;
++      tv.tv_usec = left % 1000000;
+ 
+       FD_ZERO (&readfds);
+       FD_ZERO (&exceptfds);
+       FD_SET (scb->fd, &readfds);
+       FD_SET (scb->fd, &exceptfds);
++      if (error_fd != -1)
++	FD_SET (error_fd, &readfds);
+ 
+       QUIT;
+ 
+-      nfds = scb->fd + 1;
++      nfds = std::max (scb->fd, error_fd) + 1;
+       if (timeout >= 0)
+ 	numfds = interruptible_select (nfds, &readfds, 0, &exceptfds, &tv);
+       else
+@@ -252,10 +270,31 @@ ser_base_wait_for (struct serial *scb, int timeout)
+ 					   poll.  */
+ 	}
+ 
++      if (error_fd != -1 && FD_ISSET (error_fd, &readfds))
++	{
++	  /* Closes the error fd at end of file, which stays readable.  */
++	  ser_base_read_error_fd (scb, 1);
++	  if (!FD_ISSET (scb->fd, &readfds) && !FD_ISSET (scb->fd, &exceptfds))
++	    {
++	      /* The error fd can stay readable, so SELECT's own timeout
++		 may never come.  */
++	      if (left == 0)
++		return SERIAL_TIMEOUT;
++	      continue;
++	    }
++	}
++
+       return 0;
+     }
+ }
+ 
++/* The most one call of ser_base_read_error_fd reads.  This is well
++   above what a socket holds, so that normal output is read in one go,
++   but a command that writes as fast as GDB reads cannot keep GDB here
++   past its timeout.  */
++
++static constexpr size_t ERROR_FD_READ_MAX = 1024 * 1024;
++
+ /* See ser-base.h.  */
+ 
+ void
+@@ -266,7 +305,7 @@ ser_base_read_error_fd (struct serial *scb, int close_fd)
+       ssize_t s;
+       char buf[GDB_MI_MSG_WIDTH + 1];
+ 
+-      for (;;)
++      for (size_t total = 0; total < ERROR_FD_READ_MAX; total += s)
+ 	{
+ 	  char *current;
+ 	  char *newline;
