@@ -7,7 +7,7 @@ Subject: [PATCH 29/30] gdb/remote: don't select a ptid without a thread in
 A lost connection in that window asserted in inferior_thread.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index d874e457e72..a4613e6a4d1 100644
+index 96de073d633..b339d657f9d 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -4307,7 +4307,7 @@ remote_newthread_step (threadref *ref, void *data)

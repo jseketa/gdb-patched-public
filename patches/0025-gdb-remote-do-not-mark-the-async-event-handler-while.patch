@@ -7,7 +7,7 @@ Subject: [PATCH 25/30] gdb/remote: do not mark the async event handler while
 Assertion when connecting to a non-stop target with several stopped threads.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 4578b275fcf..b2b83b6ec78 100644
+index d6e047ac1b8..8ad4791b88f 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -8354,11 +8354,12 @@ remote_target::queued_stop_reply (ptid_t ptid)

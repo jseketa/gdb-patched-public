@@ -7,7 +7,7 @@ Subject: [PATCH 26/30] gdb/remote: mark a thread stopped before giving it a
 Assertion when connecting to a non-stop target with a thread stopped by a signal.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index b2b83b6ec78..4cfce652554 100644
+index 8ad4791b88f..3ea2dcde63c 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -5178,13 +5178,15 @@ remote_target::process_initial_stop_replies (int from_tty)

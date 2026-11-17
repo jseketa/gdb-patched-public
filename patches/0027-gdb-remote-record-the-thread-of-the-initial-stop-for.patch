@@ -7,7 +7,7 @@ Subject: [PATCH 27/30] gdb/remote: record the thread of the initial stop for
 "info program" was wrong after connecting to a non-stop target.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 4cfce652554..d874e457e72 100644
+index 3ea2dcde63c..96de073d633 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -5106,6 +5106,7 @@ remote_target::print_one_stopped_thread (thread_info *thread)

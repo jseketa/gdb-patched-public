@@ -7,10 +7,10 @@ Subject: [PATCH 21/30] gdb/remote: ignore a stop reply for a thread that is
 A duplicate stop reply in non-stop hit a skip_inline_frames assertion.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 6b59303b5ec..4578b275fcf 100644
+index 6b59303b5ec..d6e047ac1b8 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
-@@ -9012,6 +9012,33 @@ remote_target::process_stop_reply (stop_reply_up stop_reply,
+@@ -9012,6 +9012,36 @@ remote_target::process_stop_reply (stop_reply_up stop_reply,
      ptid = select_thread_for_ambiguous_stop_reply (*status);
    gdb_assert (ptid != null_ptid);
  
@@ -19,13 +19,16 @@ index 6b59303b5ec..4578b275fcf 100644
 +     stopped, the reply is a duplicate.  Handing it to the core would
 +     make it process a stop for a thread that has not run since the
 +     last one.  Ignore it.  The initial stop replies of a connection
-+     are for threads that were stopped before we were there.  */
++     are for threads that were stopped before we were there.  An exec
++     is reported for the leader, which takes over the thread that
++     called exec, so it can name a thread that was not resumed.  */
 +  if (target_is_non_stop_p ()
 +      && !rs->starting_up
 +      && status->kind () != TARGET_WAITKIND_EXITED
 +      && status->kind () != TARGET_WAITKIND_SIGNALLED
 +      && status->kind () != TARGET_WAITKIND_NO_RESUMED
-+      && status->kind () != TARGET_WAITKIND_THREAD_EXITED)
++      && status->kind () != TARGET_WAITKIND_THREAD_EXITED
++      && status->kind () != TARGET_WAITKIND_EXECD)
 +    {
 +      thread_info *thr = this->find_thread (ptid);
 +
