@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 22:24:34 +0100
-Subject: [PATCH 28/37] gdb/remote: pick the first thread if the stop thread is
+Subject: [PATCH 28/39] gdb/remote: pick the first thread if the stop thread is
  not listed
 
 A stop reply naming a thread missing from the list asserted in switch_to_thread at connect.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index b1629329cf7..ecb7227bf0f 100644
+index 80ae167efaf..fcca5873ea7 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
-@@ -5626,12 +5626,17 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+@@ -5626,15 +5626,26 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
  	     multi-threaded program, this will ideally be the thread
  	     that last reported an event before GDB disconnected.  */
  	  ptid_t curr_thread = get_current_thread (wait_status);
@@ -29,9 +29,20 @@ index b1629329cf7..ecb7227bf0f 100644
 +		 is not in the list.  Just pick the first thread in
 +		 the thread list then.  */
  
- 	      remote_debug_printf ("warning: couldn't determine remote "
- 				   "current thread; picking first in list.");
-@@ -5644,7 +5649,7 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+-	      remote_debug_printf ("warning: couldn't determine remote "
+-				   "current thread; picking first in list.");
++	      if (curr_thread == null_ptid)
++		remote_debug_printf ("warning: couldn't determine remote "
++				     "current thread; picking first in list.");
++	      else
++		remote_debug_printf ("warning: remote current thread %s is "
++				     "not in the thread list; picking first "
++				     "in list.",
++				     curr_thread.to_string ().c_str ());
+ 
+ 	      for (thread_info &tp : all_non_exited_threads (this,
+ 							     minus_one_ptid))
+@@ -5644,7 +5655,7 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
  		}
  	    }
  	  else

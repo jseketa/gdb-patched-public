@@ -1,13 +1,13 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 07:59:13 +0100
-Subject: [PATCH 36/37] gdb/remote: don't select a ptid without a thread in
+Subject: [PATCH 38/39] gdb/remote: don't select a ptid without a thread in
  attach
 
 A lost connection in that window asserted in inferior_thread.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 423b8782d10..cb5511cd7f7 100644
+index 8b105b657c4..179389f99a5 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
 @@ -4307,7 +4307,7 @@ remote_newthread_step (threadref *ref, void *data)
@@ -19,7 +19,7 @@ index 423b8782d10..cb5511cd7f7 100644
    int lwp = threadref_to_int (ref);
    ptid_t ptid (pid, lwp);
  
-@@ -7075,8 +7075,6 @@ extended_remote_target::attach (const char *args, int from_tty)
+@@ -7100,8 +7100,6 @@ extended_remote_target::attach (const char *args, int from_tty)
  
    switch_to_inferior_no_thread (remote_add_inferior (false, pid, 1, 0));
  

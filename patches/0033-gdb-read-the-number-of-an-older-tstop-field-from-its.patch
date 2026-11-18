@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 00:01:09 +0100
+Subject: [PATCH 33/39] gdb: read the number of an older "tstop" field from its
+ start
+
+The older form skipped a character after the ':', reading past the end of the reply when the field was last.
+
+diff --git a/gdb/tracepoint.c b/gdb/tracepoint.c
+index 64ef476c7db..7f42c0b82d5 100644
+--- a/gdb/tracepoint.c
++++ b/gdb/tracepoint.c
+@@ -3284,19 +3284,17 @@ Status line: '%s'\n"), p, line);
+       else if (strncmp (p, stop_reason_names[trace_stop_command], p1 - p) == 0)
+ 	{
+ 	  p2 = strchr (++p1, ':');
+-	  if (!p2 || p2 > p3)
++	  if (p2 == nullptr || p2 > p3)
+ 	    {
+-	      /*older style*/
+-	      p2 = p1;
++	      /* The older style, with no description, only the number of
++		 the tracepoint.  */
++	      p = unpack_varlen_hex (p1, &val);
+ 	    }
+-	  else if (p2 != p1)
++	  else
+ 	    {
+ 	      ts->stop_desc = hex_field_to_string (p1, p2);
++	      p = unpack_varlen_hex (p2 + 1, &val);
+ 	    }
+-	  else
+-	    ts->stop_desc = xstrdup ("");
+-
+-	  p = unpack_varlen_hex (++p2, &val);
+ 	  ts->stop_reason = trace_stop_command;
+ 	}
+       else if (strncmp (p, stop_reason_names[trace_disconnected], p1 - p) == 0)
