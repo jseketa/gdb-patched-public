@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 21:40:21 +0100
+Subject: [PATCH 48/57] gdb: do not keep an unterminated trace status string
+ after a bad hex digit
+
+A non-hex username/notes left an unterminated string that tsave read past.
+
+diff --git a/gdb/tracepoint.c b/gdb/tracepoint.c
+index d903887e3ac..3ef632dc21d 100644
+--- a/gdb/tracepoint.c
++++ b/gdb/tracepoint.c
+@@ -3214,6 +3214,21 @@ merge_uploaded_trace_state_variables (struct uploaded_tsv **uploaded_tsvs)
+   free_uploaded_tsvs (uploaded_tsvs);
+ }
+ 
++/* Return a new string decoded from the hex digits from HEX up to END.
++   Decoding throws on a character that is not a hex digit (fromhex);
++   the caller is then left with nothing, rather than with a buffer that
++   has no terminator.  */
++
++static char *
++hex_field_to_string (const char *hex, const char *end)
++{
++  int count = end > hex ? (end - hex) / 2 : 0;
++  gdb::unique_xmalloc_ptr<char> str ((char *) xmalloc (count + 1));
++  int len = hex2bin (hex, (gdb_byte *) str.get (), count);
++  str.get ()[len] = '\0';
++  return str.release ();
++}
++
+ /* Parse the part of trace status syntax that is shared between
+    the remote protocol and the trace file reader.  */
+ 
+@@ -3221,7 +3236,6 @@ void
+ parse_trace_status (const char *line, struct trace_status *ts)
+ {
+   const char *p = line, *p1, *p2, *p3, *p_temp;
+-  int end;
+   ULONGEST val;
+ 
+   ts->running_known = 1;
+@@ -3277,9 +3291,7 @@ Status line: '%s'\n"), p, line);
+ 	    }
+ 	  else if (p2 != p1)
+ 	    {
+-	      ts->stop_desc = (char *) xmalloc (strlen (line));
+-	      end = hex2bin (p1, (gdb_byte *) ts->stop_desc, (p2 - p1) / 2);
+-	      ts->stop_desc[end] = '\0';
++	      ts->stop_desc = hex_field_to_string (p1, p2);
+ 	    }
+ 	  else
+ 	    ts->stop_desc = xstrdup ("");
+@@ -3297,9 +3309,7 @@ Status line: '%s'\n"), p, line);
+ 	  p2 = strchr (++p1, ':');
+ 	  if (p2 != p1)
+ 	    {
+-	      ts->stop_desc = (char *) xmalloc ((p2 - p1) / 2 + 1);
+-	      end = hex2bin (p1, (gdb_byte *) ts->stop_desc, (p2 - p1) / 2);
+-	      ts->stop_desc[end] = '\0';
++	      ts->stop_desc = hex_field_to_string (p1, p2);
+ 	    }
+ 	  else
+ 	    ts->stop_desc = xstrdup ("");
+@@ -3351,17 +3361,13 @@ Status line: '%s'\n"), p, line);
+       else if (strncmp (p, "username", p1 - p) == 0)
+ 	{
+ 	  ++p1;
+-	  ts->user_name = (char *) xmalloc (strlen (p) / 2);
+-	  end = hex2bin (p1, (gdb_byte *) ts->user_name, (p3 - p1)  / 2);
+-	  ts->user_name[end] = '\0';
++	  ts->user_name = hex_field_to_string (p1, p3);
+ 	  p = p3;
+ 	}
+       else if (strncmp (p, "notes", p1 - p) == 0)
+ 	{
+ 	  ++p1;
+-	  ts->notes = (char *) xmalloc (strlen (p) / 2);
+-	  end = hex2bin (p1, (gdb_byte *) ts->notes, (p3 - p1) / 2);
+-	  ts->notes[end] = '\0';
++	  ts->notes = hex_field_to_string (p1, p3);
+ 	  p = p3;
+ 	}
+       else

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 07:14:45 +0100
+Subject: [PATCH 46/57] gdb: do not throw from btrace_teardown when the target
+ is gone
+
+Losing the connection with btrace state left made GDB terminate while mourning.
+
+diff --git a/gdb/btrace.c b/gdb/btrace.c
+index f5f2d6da972..770b7c2eb24 100644
+--- a/gdb/btrace.c
++++ b/gdb/btrace.c
+@@ -2097,7 +2097,18 @@ btrace_teardown (struct thread_info *tp)
+   DEBUG ("teardown thread %s (%s)", print_thread_id (tp),
+ 	 tp->ptid.to_string ().c_str ());
+ 
+-  target_teardown_btrace (btp->target);
++  /* This is called when a thread goes away, e.g. while an inferior is
++     mourned after the remote connection was lost.  The target that
++     traced the thread may be gone then, and there is nothing left to
++     tear down on it; drop the thread's trace anyway.  */
++  try
++    {
++      target_teardown_btrace (btp->target);
++    }
++  catch (const gdb_exception_error &ex)
++    {
++      DEBUG ("teardown failed: %s", ex.what ());
++    }
+   btp->target = NULL;
+ 
+   btrace_clear (tp);

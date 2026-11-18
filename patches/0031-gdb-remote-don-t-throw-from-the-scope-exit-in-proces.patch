@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 00:00:22 +0100
+Subject: [PATCH 31/57] gdb/remote: don't throw from the scope exit in
+ process_initial_stop_replies
+
+A connection lost during a non-stop connect made the scope exit throw on the exec target: an internal error.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index fcca5873ea7..4210446f26e 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -5229,9 +5229,28 @@ remote_target::process_initial_stop_replies (int from_tty)
+ 	   the poll in stop_all_threads to consider events from it, so enable
+ 	   it temporarily.  */
+ 	gdb_assert (!this->is_async_p ());
+-	SCOPE_EXIT { target_async (false); };
+ 	target_async (true);
++
++	/* If an error leaves stop_all_threads, disable async on the way
++	   out.  This must not throw.  If the connection was lost, the
++	   remote target is gone by then, and this fails too; the error
++	   being thrown already says why.  Otherwise, disable it below,
++	   where an error can be reported.  */
++	auto disable_on_error = make_scope_exit ([] ()
++	  {
++	    try
++	      {
++		target_async (false);
++	      }
++	    catch (const gdb_exception &)
++	      {
++	      }
++	  });
++
+ 	stop_all_threads ("remote connect in all-stop");
++
++	disable_on_error.release ();
++	target_async (false);
+       }
+ 
+       /* If all threads of an inferior were already stopped, we

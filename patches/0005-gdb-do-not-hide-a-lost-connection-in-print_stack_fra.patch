@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 11:30:37 +0100
-Subject: [PATCH 05/51] gdb: do not hide a lost connection in print_stack_frame
+Subject: [PATCH 05/57] gdb: do not hide a lost connection in print_stack_frame
 
 Rethrow TARGET_CLOSE_ERROR instead of swallowing it, which led to an inferior_thread assertion.
 

@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 16:10:49 +0100
+Subject: [PATCH 39/57] gdb: stop setting up a remote connection if the program
+ has ended
+
+A program that ended while GDB connected hit an assertion in post_create_inferior.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 148d73d6fcb..7b983990c57 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -3875,6 +3875,12 @@ start_remote (int from_tty)
+      for an async run.  */
+   wait_for_inferior (inf);
+ 
++  /* GDB may have resumed the program from the event it found it in,
++     e.g. a syscall stop it does not catch, and the program may have
++     ended meanwhile.  Then there is nothing to set up.  */
++  if (inferior_ptid == null_ptid)
++    error (_("The program is no longer running."));
++
+   /* Now that the inferior has stopped, do any bookkeeping like
+      loading shared libraries.  We want to do this before normal_stop,
+      so that the displayed frame is up to date.  */

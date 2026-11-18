@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 16:44:58 +0100
+Subject: [PATCH 41/57] gdb: do not assume a stop PC in "info program"
+
+"info program" asserted for a thread GDB never saw stop.
+
+diff --git a/gdb/infcmd.c b/gdb/infcmd.c
+index 6592d1b3299..9d288dffea7 100644
+--- a/gdb/infcmd.c
++++ b/gdb/infcmd.c
+@@ -2144,8 +2144,13 @@ info_program_command (const char *args, int from_tty)
+   int stat = bpstat_num (&bs, &num);
+ 
+   target_files_info ();
+-  gdb_printf (_("Program stopped at %s.\n"),
+-	      paddress (current_inferior ()->arch (), tp->stop_pc ()));
++  /* A thread GDB has not seen stop, e.g. one it only knows from the
++     target's thread list, has no stop PC.  */
++  if (tp->stop_pc_p ())
++    gdb_printf (_("Program stopped at %s.\n"),
++		paddress (current_inferior ()->arch (), tp->stop_pc ()));
++  else
++    gdb_printf (_("Program stopped.\n"));
+   if (tp->control.stop_step)
+     gdb_printf (_("It stopped after being stepped.\n"));
+   else if (stat != 0)
