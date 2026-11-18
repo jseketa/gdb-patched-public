@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 00:14:42 +0100
-Subject: [PATCH 14/44] gdb: do not assert on a stub reporting another thread
+Subject: [PATCH 14/45] gdb: do not assert on a stub reporting another thread
  during a step-over
 
 A stub may report another thread when an in-line step-over ends.
