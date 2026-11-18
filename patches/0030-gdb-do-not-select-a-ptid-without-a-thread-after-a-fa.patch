@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 06:49:53 +0100
-Subject: [PATCH 30/45] gdb: do not select a ptid without a thread after a
+Subject: [PATCH 30/48] gdb: do not select a ptid without a thread after a
  failed displaced-step write
 
 A connection lost during the restore write let the scope exit select a ptid with no thread: assertion in inferior_thread.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 04:17:49 +0100
-Subject: [PATCH 08/45] gdbserver: do not use a thread that exited in
+Subject: [PATCH 08/48] gdbserver: do not use a thread that exited in
  start_step_over
 
 stop_all_lwps can delete the LWP being stepped over (use-after-free).
