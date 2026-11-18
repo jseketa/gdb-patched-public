@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 22:28:21 +0100
-Subject: [PATCH 15/43] gdb: discard stops of a process once it has exited
+Subject: [PATCH 15/44] gdb: discard stops of a process once it has exited
 
 Drop queued stop replies of a process when its exit arrives.
 

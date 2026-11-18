@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 15:20:52 +0100
-Subject: [PATCH 06/43] gdbserver: tag all threads as stopped after an all-stop
+Subject: [PATCH 06/44] gdbserver: tag all threads as stopped after an all-stop
  vAttach
 
 Otherwise gdbserver can resume attached threads that GDB believes are stopped.

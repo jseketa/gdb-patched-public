@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 19:04:18 +0100
-Subject: [PATCH 39/43] gdb/remote: mark a thread stopped before giving it a
+Subject: [PATCH 40/44] gdb/remote: mark a thread stopped before giving it a
  pending status
 
 Assertion when connecting to a non-stop target with a thread stopped by a signal.
 
 diff --git a/gdb/remote.c b/gdb/remote.c
-index 715b2f52bf4..6df968b5c92 100644
+index 87a0675d0d8..467610aa970 100644
 --- a/gdb/remote.c
 +++ b/gdb/remote.c
-@@ -5178,13 +5178,15 @@ remote_target::process_initial_stop_replies (int from_tty)
+@@ -5215,13 +5215,15 @@ remote_target::process_initial_stop_replies (int from_tty)
  	  ws.set_stopped (sig);
  	}
  

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 09:12:11 +0100
-Subject: [PATCH 02/43] gdb: watch a serial's error fd while waiting for input
+Subject: [PATCH 02/44] gdb: watch a serial's error fd while waiting for input
 
 ser_base_wait_for also waits on the error fd, so a pipe command that fills its stderr no longer costs a second per full socket.
 
