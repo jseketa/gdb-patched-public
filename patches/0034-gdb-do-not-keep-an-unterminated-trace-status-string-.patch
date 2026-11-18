@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 21:40:21 +0100
-Subject: [PATCH 30/39] gdb: do not keep an unterminated trace status string
+Subject: [PATCH 34/43] gdb: do not keep an unterminated trace status string
  after a bad hex digit
 
 A non-hex username/notes left an unterminated string that tsave read past.

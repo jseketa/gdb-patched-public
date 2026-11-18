@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 10:27:07 +0100
-Subject: [PATCH 04/39] gdb: make the timeout of wait_to_die_with_timeout work
+Subject: [PATCH 04/43] gdb: make the timeout of wait_to_die_with_timeout work
  again
 
 gdb::waitpid retries the EINTR from SIGALRM (a9791f1438a), so a pipe command that does not exit hung GDB.

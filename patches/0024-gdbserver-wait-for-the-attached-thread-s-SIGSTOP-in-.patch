@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 04:10:55 +0100
-Subject: [PATCH 24/39] gdbserver: wait for the attached thread's SIGSTOP in
+Subject: [PATCH 24/43] gdbserver: wait for the attached thread's SIGSTOP in
  all-stop attach
 
 Waiting for any thread left the leader's SIGSTOP pending (attach-into-signal.exp).

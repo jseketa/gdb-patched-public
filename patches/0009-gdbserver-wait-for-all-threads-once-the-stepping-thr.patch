@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 04:17:49 +0100
-Subject: [PATCH 09/39] gdbserver: wait for all threads once the stepping
+Subject: [PATCH 09/43] gdbserver: wait for all threads once the stepping
  thread has exited
 
 The filtered wait reported NO_RESUMED and the process exit was never reported.
