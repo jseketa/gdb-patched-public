@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 21:40:39 +0100
-Subject: [PATCH 26/48] gdb/remote: leave "timeout" in the buffer when getpkt
+Subject: [PATCH 26/51] gdb/remote: leave "timeout" in the buffer when getpkt
  gives up
 
 A packet that broke off left unterminated bytes that remote_query_supported parsed past the buffer.

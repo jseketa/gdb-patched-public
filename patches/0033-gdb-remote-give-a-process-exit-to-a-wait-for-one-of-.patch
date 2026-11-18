@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 14:35:04 +0100
-Subject: [PATCH 33/48] gdb/remote: give a process exit to a wait for one of
+Subject: [PATCH 33/51] gdb/remote: give a process exit to a wait for one of
  its threads
 
 An exit reported for the process never reached a wait for one of its threads: GDB spun forever.

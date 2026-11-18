@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 07:59:13 +0100
-Subject: [PATCH 47/48] gdb/remote: don't select a ptid without a thread in
+Subject: [PATCH 50/51] gdb/remote: don't select a ptid without a thread in
  attach
 
 A lost connection in that window asserted in inferior_thread.
