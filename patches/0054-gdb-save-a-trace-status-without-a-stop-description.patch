@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 23:30:36 +0100
-Subject: [PATCH 52/67] gdb: save a trace status without a stop description
+Subject: [PATCH 54/69] gdb: save a trace status without a stop description
 
 tsave passed a null stop description to strlen.
 

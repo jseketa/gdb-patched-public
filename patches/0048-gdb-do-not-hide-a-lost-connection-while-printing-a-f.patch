@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 08:49:01 +0100
+Subject: [PATCH 48/69] gdb: do not hide a lost connection while printing a
+ frame's arguments
+
+Printing a frame turned a lost connection into an argument's error text; GDB then asserted or used freed threads.
+
+diff --git a/gdb/stack.c b/gdb/stack.c
+index a96511aea60..38f25345337 100644
+--- a/gdb/stack.c
++++ b/gdb/stack.c
+@@ -526,6 +526,10 @@ print_frame_arg (const frame_print_options &fp_opts,
+ 	    }
+ 	  catch (const gdb_exception_error &except)
+ 	    {
++	      /* The target has gone: let the caller know.  */
++	      if (except.error == TARGET_CLOSE_ERROR)
++		throw;
++
+ 	      stb.printf (_("<error reading variable: %s>"),
+ 			  except.what ());
+ 	      style = metadata_style.style ();
+@@ -537,8 +541,8 @@ print_frame_arg (const frame_print_options &fp_opts,
+ }
+ 
+ /* Read in inferior function local SYM at FRAME into ARGP.  Caller is
+-   responsible for xfree of ARGP->ERROR.  This function never throws an
+-   exception.  */
++   responsible for xfree of ARGP->ERROR.  This function throws an
++   exception only if the target has gone (TARGET_CLOSE_ERROR).  */
+ 
+ void
+ read_frame_local (struct symbol *sym, const frame_info_ptr &frame,
+@@ -554,12 +558,17 @@ read_frame_local (struct symbol *sym, const frame_info_ptr &frame,
+     }
+   catch (const gdb_exception_error &except)
+     {
++      /* The target has gone: let the caller know.  */
++      if (except.error == TARGET_CLOSE_ERROR)
++	throw;
++
+       argp->error = make_unique_xstrdup (except.what ());
+     }
+ }
+ 
+ /* Read in inferior function parameter SYM at FRAME into ARGP.  This
+-   function never throws an exception.  */
++   function throws an exception only if the target has gone
++   (TARGET_CLOSE_ERROR).  */
+ 
+ void
+ read_frame_arg (const frame_print_options &fp_opts,
+@@ -579,6 +588,10 @@ read_frame_arg (const frame_print_options &fp_opts,
+ 	}
+       catch (const gdb_exception_error &except)
+ 	{
++	  /* The target has gone: let the caller know.  */
++	  if (except.error == TARGET_CLOSE_ERROR)
++	    throw;
++
+ 	  val_error = (char *) alloca (except.message->size () + 1);
+ 	  strcpy (val_error, except.what ());
+ 	}
+@@ -597,6 +610,10 @@ read_frame_arg (const frame_print_options &fp_opts,
+ 	}
+       catch (const gdb_exception_error &except)
+ 	{
++	  /* The target has gone: let the caller know.  */
++	  if (except.error == TARGET_CLOSE_ERROR)
++	    throw;
++
+ 	  if (except.error != NO_ENTRY_VALUE_ERROR)
+ 	    {
+ 	      entryval_error = (char *) alloca (except.message->size () + 1);
+@@ -653,6 +670,10 @@ read_frame_arg (const frame_print_options &fp_opts,
+ 		    }
+ 		  catch (const gdb_exception_error &except)
+ 		    {
++		      /* The target has gone: let the caller know.  */
++		      if (except.error == TARGET_CLOSE_ERROR)
++			throw;
++
+ 		      /* If the dereferenced content could not be
+ 			 fetched do not display anything.  */
+ 		      if (except.error == NO_ENTRY_VALUE_ERROR)
+@@ -702,6 +723,10 @@ read_frame_arg (const frame_print_options &fp_opts,
+ 	    }
+ 	  catch (const gdb_exception_error &except)
+ 	    {
++	      /* The target has gone: let the caller know.  */
++	      if (except.error == TARGET_CLOSE_ERROR)
++		throw;
++
+ 	      val_error = (char *) alloca (except.message->size () + 1);
+ 	      strcpy (val_error, except.what ());
+ 	    }
+@@ -1371,6 +1396,9 @@ print_frame (struct ui_out *uiout,
+ 	    }
+ 	  catch (const gdb_exception_error &e)
+ 	    {
++	      /* The target has gone: let the caller know.  */
++	      if (e.error == TARGET_CLOSE_ERROR)
++		throw;
+ 	    }
+ 	}
+ 	QUIT;

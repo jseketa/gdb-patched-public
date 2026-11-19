@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 04:23:28 +0100
-Subject: [PATCH 65/67] gdb: do not hide a lost connection when inserting
+Subject: [PATCH 67/69] gdb: do not hide a lost connection when inserting
  breakpoints to keep going
 
 A lost connection while inserting breakpoints to keep stepping was a warning; GDB then asserted.
 
 diff --git a/gdb/infrun.c b/gdb/infrun.c
-index 609299c7c56..9395b05ee8e 100644
+index f6d8e8a8dc4..c8e3eaec765 100644
 --- a/gdb/infrun.c
 +++ b/gdb/infrun.c
-@@ -9334,9 +9334,16 @@ keep_going_pass_signal (struct execution_control_state *ecs)
+@@ -9322,9 +9322,16 @@ keep_going_pass_signal (struct execution_control_state *ecs)
  	}
        catch (const gdb_exception_error &e)
  	{

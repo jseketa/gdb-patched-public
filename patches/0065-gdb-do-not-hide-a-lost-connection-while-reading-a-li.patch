@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 01:43:03 +0100
-Subject: [PATCH 63/67] gdb: do not hide a lost connection while reading a
+Subject: [PATCH 65/69] gdb: do not hide a lost connection while reading a
  library's symbols
 
 A lost connection while reading a library's symbols was a warning; run went on and asserted.

@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 07:59:14 +0100
-Subject: [PATCH 58/67] gdb/infrun: don't throw from the scope exit in
+Subject: [PATCH 60/69] gdb/infrun: don't throw from the scope exit in
  stop_all_threads
 
 A closed connection made QThreadEvents:0 throw from a destructor.
 
 diff --git a/gdb/infrun.c b/gdb/infrun.c
-index 203c36cee87..609299c7c56 100644
+index c3501e83b59..f6d8e8a8dc4 100644
 --- a/gdb/infrun.c
 +++ b/gdb/infrun.c
-@@ -5766,6 +5766,22 @@ re_enable_target_async ()
+@@ -5754,6 +5754,22 @@ re_enable_target_async ()
      }
  }
  
@@ -33,7 +33,7 @@ index 203c36cee87..609299c7c56 100644
  /* See infrun.h.  */
  
  void
-@@ -5785,33 +5801,29 @@ stop_all_threads (const char *reason, inferior *inf)
+@@ -5773,33 +5789,29 @@ stop_all_threads (const char *reason, inferior *inf)
  
    scoped_restore_current_thread restore_thread;
  
@@ -42,12 +42,12 @@ index 203c36cee87..609299c7c56 100644
 -    {
 -      if (inf != nullptr && inf->process_target () != target)
 -	continue;
-+  set_thread_events (inf, true);
- 
+-
 -      switch_to_target_no_thread (target);
 -      target_thread_events (true);
 -    }
--
++  set_thread_events (inf, true);
+ 
 -  SCOPE_EXIT
 +  /* If an error leaves this function, disable thread events on the way
 +     out.  This must not throw.  If it fails too (e.g. the remote
@@ -86,7 +86,7 @@ index 203c36cee87..609299c7c56 100644
  
    scoped_disable_commit_resumed disable_commit_resumed ("stop all threads");
  
-@@ -5904,6 +5916,11 @@ stop_all_threads (const char *reason, inferior *inf)
+@@ -5892,6 +5904,11 @@ stop_all_threads (const char *reason, inferior *inf)
  	    }
  	}
      }

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 07:14:45 +0100
-Subject: [PATCH 48/67] gdb: do not throw from btrace_teardown when the target
+Subject: [PATCH 50/69] gdb: do not throw from btrace_teardown when the target
  is gone
 
 Losing the connection with btrace state left made GDB terminate while mourning.

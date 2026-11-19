@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 15:33:53 +0100
-Subject: [PATCH 36/67] gdb/remote: reject a stop reply without a signal number
+Subject: [PATCH 36/69] gdb/remote: reject a stop reply without a signal number
 
 A 'T' reply shorter than "Txx" was parsed past its end.
 

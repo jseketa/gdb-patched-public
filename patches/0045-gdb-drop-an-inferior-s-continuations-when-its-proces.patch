@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 21:50:25 +0100
-Subject: [PATCH 45/67] gdb: drop an inferior's continuations when its process
+Subject: [PATCH 45/69] gdb: drop an inferior's continuations when its process
  is gone
 
 A non-stop attach that lost its connection left a continuation that ran at the next process's first stop.
