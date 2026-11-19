@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 04:23:40 +0100
+Subject: [PATCH 65/66] gdb: do not touch the displaced step buffers after the
+ target has gone
+
+A failed PC write for a displaced step reset a buffer the inferior's exit had freed.
+
+diff --git a/gdb/displaced-stepping.c b/gdb/displaced-stepping.c
+index 5ce750de824..305dd43e35e 100644
+--- a/gdb/displaced-stepping.c
++++ b/gdb/displaced-stepping.c
+@@ -146,26 +146,32 @@ displaced_step_buffers::prepare (thread_info *thread, CORE_ADDR &displaced_pc)
+   /* Save this, now that we know everything went fine.  */
+   buffer->copy_insn_closure = std::move (copy_insn_closure);
+ 
+-  /* Reset the displaced step buffer state if we failed to write PC.
+-     Otherwise we will prevent this buffer from being used, as it will
+-     always have a thread in buffer->current_thread.  */
+-  auto reset_buffer = make_scope_exit
+-    ([buffer] ()
+-      {
+-	buffer->current_thread = nullptr;
+-	buffer->copy_insn_closure.reset ();
+-      });
+-
+   /* Adjust the PC so it points to the displaced step buffer address that will
+      be used.  This needs to be done after we save the copy_insn_closure, as
+      some architectures (Arm, for one) need that information so they can adjust
+      other data as needed.  In particular, Arm needs to know if the instruction
+      being executed in the displaced step buffer is thumb or not.  Without that
+      information, things will be very wrong in a random way.  */
+-  regcache_write_pc (regcache, buffer->addr);
+-
+-  /* PC update successful.  Discard the displaced step state rollback.  */
+-  reset_buffer.release ();
++  try
++    {
++      regcache_write_pc (regcache, buffer->addr);
++    }
++  catch (const gdb_exception &ex)
++    {
++      /* Reset the displaced step buffer state if we failed to write PC.
++	 Otherwise we will prevent this buffer from being used, as it will
++	 always have a thread in buffer->current_thread.
++
++	 But not if the target has gone: the inferior's displaced
++	 stepping state, these buffers included, may have gone with it
++	 (e.g. the Linux one is deleted when the inferior exits).  */
++      if (ex.error != TARGET_CLOSE_ERROR)
++	{
++	  buffer->current_thread = nullptr;
++	  buffer->copy_insn_closure.reset ();
++	}
++      throw;
++    }
+ 
+   /* Tell infrun not to try preparing a displaced step again for this inferior if
+      all buffers are taken.  */

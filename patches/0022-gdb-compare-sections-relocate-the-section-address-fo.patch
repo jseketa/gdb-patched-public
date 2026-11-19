@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 23:20:44 +0100
-Subject: [PATCH 22/63] gdb: compare-sections: relocate the section address for
+Subject: [PATCH 22/66] gdb: compare-sections: relocate the section address for
  PIE
 
 compare-sections read unrelocated addresses for a PIE.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 05:17:11 +0100
-Subject: [PATCH 07/63] gdb/remote: tell the stub about "set non-stop" before
+Subject: [PATCH 07/66] gdb/remote: tell the stub about "set non-stop" before
  run and attach
 
 "set non-stop" changed after connecting was never sent to the stub.

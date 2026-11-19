@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 21:50:24 +0100
-Subject: [PATCH 44/63] gdb: keep going with the vfork parent when another
+Subject: [PATCH 44/66] gdb: keep going with the vfork parent when another
  thread reports an event
 
 An event of another thread during a vfork-done wait made GDB resume that thread (internal_resume_ptid assertion).

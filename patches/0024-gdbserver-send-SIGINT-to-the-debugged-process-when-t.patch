@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 23:22:33 +0100
-Subject: [PATCH 24/63] gdbserver: send SIGINT to the debugged process when the
+Subject: [PATCH 24/66] gdbserver: send SIGINT to the debugged process when the
  first one is gone
 
 Ctrl-C failed after gdbserver detached from the process it started (follow-fork-mode child).

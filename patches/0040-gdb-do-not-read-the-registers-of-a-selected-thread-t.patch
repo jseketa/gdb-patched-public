@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 16:29:04 +0100
-Subject: [PATCH 40/63] gdb: do not read the registers of a selected thread
+Subject: [PATCH 40/66] gdb: do not read the registers of a selected thread
  that has exited
 
 An exited selected thread hit an assertion in get_thread_regcache.

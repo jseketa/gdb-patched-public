@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 04:23:28 +0100
+Subject: [PATCH 64/66] gdb: do not hide a lost connection when inserting
+ breakpoints to keep going
+
+A lost connection while inserting breakpoints to keep stepping was a warning; GDB then asserted.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 609299c7c56..9395b05ee8e 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -9334,9 +9334,16 @@ keep_going_pass_signal (struct execution_control_state *ecs)
+ 	}
+       catch (const gdb_exception_error &e)
+ 	{
++	  clear_step_over_info ();
++
++	  /* Not if the target has gone: its threads, the event thread
++	     included, have gone with it, and the session cannot
++	     continue.  */
++	  if (e.error == TARGET_CLOSE_ERROR)
++	    throw;
++
+ 	  exception_print (gdb_stderr, e);
+ 	  stop_waiting (ecs);
+-	  clear_step_over_info ();
+ 	  return;
+ 	}
+ 

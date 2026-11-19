@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 07:14:46 +0100
-Subject: [PATCH 33/63] gdb/remote: reject a reply to '?' that is not a stop
+Subject: [PATCH 33/66] gdb/remote: reject a reply to '?' that is not a stop
 
 An all-stop stub answering '?' with something other than a stop made GDB spin forever at connect.
 
