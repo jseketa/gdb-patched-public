@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 16:44:58 +0100
-Subject: [PATCH 41/57] gdb: do not assume a stop PC in "info program"
+Subject: [PATCH 41/63] gdb: do not assume a stop PC in "info program"
 
 "info program" asserted for a thread GDB never saw stop.
 

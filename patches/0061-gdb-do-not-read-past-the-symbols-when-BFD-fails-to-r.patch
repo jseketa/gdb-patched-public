@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 01:36:34 +0100
+Subject: [PATCH 61/63] gdb: do not read past the symbols when BFD fails to
+ read them
+
+A -1 symbol count was kept as unsigned, and GDB read past the dynamic symbol table.
+
+diff --git a/gdb/solib.c b/gdb/solib.c
+index 97f3843f53a..5b2bd96755c 100644
+--- a/gdb/solib.c
++++ b/gdb/solib.c
+@@ -1802,13 +1802,14 @@ bfd_lookup_symbol_from_dyn_symtab
+ 
+   if (storage_needed > 0)
+     {
+-      unsigned int i;
+       gdb::def_vector<asymbol *> storage (storage_needed / sizeof (asymbol *));
+       asymbol **symbol_table = storage.data ();
+-      unsigned int number_of_symbols
++      /* -1 if BFD could not read the symbols: then there is none to
++	 find.  */
++      long number_of_symbols
+ 	= bfd_canonicalize_dynamic_symtab (abfd, symbol_table);
+ 
+-      for (i = 0; i < number_of_symbols; i++)
++      for (long i = 0; i < number_of_symbols; i++)
+ 	{
+ 	  asymbol *sym = *symbol_table++;
+ 

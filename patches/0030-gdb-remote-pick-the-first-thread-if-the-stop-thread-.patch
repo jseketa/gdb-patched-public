@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 22:24:34 +0100
-Subject: [PATCH 30/57] gdb/remote: pick the first thread if the stop thread is
+Subject: [PATCH 30/63] gdb/remote: pick the first thread if the stop thread is
  not listed
 
 A stop reply naming a thread missing from the list asserted in switch_to_thread at connect.

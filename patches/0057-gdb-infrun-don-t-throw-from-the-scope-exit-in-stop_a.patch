@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 07:59:14 +0100
-Subject: [PATCH 56/57] gdb/infrun: don't throw from the scope exit in
+Subject: [PATCH 57/63] gdb/infrun: don't throw from the scope exit in
  stop_all_threads
 
 A closed connection made QThreadEvents:0 throw from a destructor.
 
 diff --git a/gdb/infrun.c b/gdb/infrun.c
-index 1c43a373ab6..1e5ff752bef 100644
+index 203c36cee87..609299c7c56 100644
 --- a/gdb/infrun.c
 +++ b/gdb/infrun.c
-@@ -5763,6 +5763,22 @@ re_enable_target_async ()
+@@ -5766,6 +5766,22 @@ re_enable_target_async ()
      }
  }
  
@@ -33,7 +33,7 @@ index 1c43a373ab6..1e5ff752bef 100644
  /* See infrun.h.  */
  
  void
-@@ -5782,33 +5798,29 @@ stop_all_threads (const char *reason, inferior *inf)
+@@ -5785,33 +5801,29 @@ stop_all_threads (const char *reason, inferior *inf)
  
    scoped_restore_current_thread restore_thread;
  
@@ -86,7 +86,7 @@ index 1c43a373ab6..1e5ff752bef 100644
  
    scoped_disable_commit_resumed disable_commit_resumed ("stop all threads");
  
-@@ -5901,6 +5913,11 @@ stop_all_threads (const char *reason, inferior *inf)
+@@ -5904,6 +5916,11 @@ stop_all_threads (const char *reason, inferior *inf)
  	    }
  	}
      }

@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 01:43:03 +0100
+Subject: [PATCH 60/63] gdb: do not lose or throw a close error in
+ target_fileio_read_alloc
+
+A close failing on a lost connection threw from a destructor (abort), or its error was lost.
+
+diff --git a/gdb/target.c b/gdb/target.c
+index 56a5f78c4c0..b984db3e5e4 100644
+--- a/gdb/target.c
++++ b/gdb/target.c
+@@ -3450,16 +3450,38 @@ class scoped_target_fd
+   {
+   }
+ 
++  /* Close the file, if close was not called.  This is for the paths
++     where an error is on its way out already, often because the remote
++     connection has been lost: ignore errors on close, as
++     ~target_fileio_stream does; an exception leaving a destructor
++     terminates GDB.  */
+   ~scoped_target_fd ()
+   {
+     if (m_fd != target_fd::INVALID)
+       {
+ 	fileio_error target_errno;
+ 
+-	target_fileio_close (m_fd, &target_errno);
++	try
++	  {
++	    target_fileio_close (m_fd, &target_errno);
++	  }
++	catch (const gdb_exception &ex)
++	  {
++	  }
+       }
+   }
+ 
++  /* Close the file now, letting an exception through (e.g. if the
++     remote connection has been lost).  */
++  void close ()
++  {
++    fileio_error target_errno;
++    target_fd fd = m_fd;
++
++    m_fd = target_fd::INVALID;
++    target_fileio_close (fd, &target_errno);
++  }
++
+   DISABLE_COPY_AND_ASSIGN (scoped_target_fd);
+ 
+   target_fd get () const noexcept
+@@ -3484,7 +3506,6 @@ target_fileio_read_alloc_1 (struct inferior *inf, const char *filename,
+ 			    gdb_byte **buf_p, int padding)
+ {
+   size_t buf_alloc, buf_pos;
+-  gdb_byte *buf;
+   LONGEST n;
+   fileio_error target_errno;
+ 
+@@ -3497,26 +3518,26 @@ target_fileio_read_alloc_1 (struct inferior *inf, const char *filename,
+   /* Start by reading up to 4K at a time.  The target will throttle
+      this number down if necessary.  */
+   buf_alloc = 4096;
+-  buf = (gdb_byte *) xmalloc (buf_alloc);
++  gdb::unique_xmalloc_ptr<gdb_byte> buf ((gdb_byte *) xmalloc (buf_alloc));
+   buf_pos = 0;
+   while (1)
+     {
+-      n = target_fileio_pread (fd.get (), &buf[buf_pos],
++      n = target_fileio_pread (fd.get (), buf.get () + buf_pos,
+ 			       buf_alloc - buf_pos - padding, buf_pos,
+ 			       &target_errno);
+       if (n < 0)
+ 	{
+ 	  /* An error occurred.  */
+-	  xfree (buf);
+ 	  return -1;
+ 	}
+       else if (n == 0)
+ 	{
+-	  /* Read all there was.  */
+-	  if (buf_pos == 0)
+-	    xfree (buf);
+-	  else
+-	    *buf_p = buf;
++	  /* Read all there was.  Close the file here rather than in
++	     FD's destructor, so that an error closing it, such as a
++	     lost remote connection, reaches the caller.  */
++	  fd.close ();
++	  if (buf_pos != 0)
++	    *buf_p = buf.release ();
+ 	  return buf_pos;
+ 	}
+ 
+@@ -3526,7 +3547,7 @@ target_fileio_read_alloc_1 (struct inferior *inf, const char *filename,
+       if (buf_alloc < buf_pos * 2)
+ 	{
+ 	  buf_alloc *= 2;
+-	  buf = (gdb_byte *) xrealloc (buf, buf_alloc);
++	  buf.reset ((gdb_byte *) xrealloc (buf.release (), buf_alloc));
+ 	}
+ 
+       QUIT;

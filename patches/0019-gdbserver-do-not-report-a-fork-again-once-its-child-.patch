@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 17:10:34 +0100
-Subject: [PATCH 19/57] gdbserver: do not report a fork again once its child is
+Subject: [PATCH 19/63] gdbserver: do not report a fork again once its child is
  gone
 
 After a reconnect, '?' reported a fork whose child had been killed.

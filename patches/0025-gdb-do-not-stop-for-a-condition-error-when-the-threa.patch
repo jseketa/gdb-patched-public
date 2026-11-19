@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 23:52:51 +0100
-Subject: [PATCH 25/57] gdb: do not stop for a condition error when the thread
+Subject: [PATCH 25/63] gdb: do not stop for a condition error when the thread
  is gone
 
 Non-stop: a memory error from a condition in an exiting process gave a bogus breakpoint stop (bug 18749).

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 16:10:49 +0100
-Subject: [PATCH 39/57] gdb: stop setting up a remote connection if the program
+Subject: [PATCH 39/63] gdb: stop setting up a remote connection if the program
  has ended
 
 A program that ended while GDB connected hit an assertion in post_create_inferior.

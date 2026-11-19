@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 19:04:18 +0100
-Subject: [PATCH 54/57] gdb/remote: record the thread of the initial stop for
+Subject: [PATCH 55/63] gdb/remote: record the thread of the initial stop for
  "info program"
 
 "info program" was wrong after connecting to a non-stop target.

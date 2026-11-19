@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 23:22:46 +0100
-Subject: [PATCH 57/57] gdb: keep a lost connection's error when BFD reads
+Subject: [PATCH 58/63] gdb: keep a lost connection's error when BFD reads
  through the target
 
 A connection lost during a read inside BFD was dropped with the target gone, ending in inferior_thread assertions.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 15:44:19 +0100
-Subject: [PATCH 37/57] gdb/linux-nat: don't resume threads to list markers
+Subject: [PATCH 37/63] gdb/linux-nat: don't resume threads to list markers
  without the agent
 
 "info static-tracepoint-markers" let a stopped native program run.
