@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 01:43:03 +0100
-Subject: [PATCH 60/66] gdb: do not lose or throw a close error in
+Subject: [PATCH 61/67] gdb: do not lose or throw a close error in
  target_fileio_read_alloc
 
 A close failing on a lost connection threw from a destructor (abort), or its error was lost.

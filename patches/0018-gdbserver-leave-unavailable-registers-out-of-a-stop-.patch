@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 01:03:49 +0100
-Subject: [PATCH 18/66] gdbserver: leave unavailable registers out of a stop
+Subject: [PATCH 18/67] gdbserver: leave unavailable registers out of a stop
  reply
 
 Registers a thread that just exited cannot have were sent as 'x' digits in a T reply, which only a g reply may contain.

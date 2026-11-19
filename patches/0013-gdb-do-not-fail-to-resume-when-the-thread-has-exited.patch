@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 04:17:50 +0100
-Subject: [PATCH 13/66] gdb: do not fail to resume when the thread has exited
+Subject: [PATCH 13/67] gdb: do not fail to resume when the thread has exited
 
 handle_thread_exited could pick a dead thread, and resume_1 threw on its registers.
 

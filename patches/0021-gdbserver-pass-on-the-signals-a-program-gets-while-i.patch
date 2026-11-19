@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 20:20:20 +0100
-Subject: [PATCH 21/66] gdbserver: pass on the signals a program gets while it
+Subject: [PATCH 21/67] gdbserver: pass on the signals a program gets while it
  starts up
 
 Startup hung when the shell waited for a signal gdbserver dropped (zsh command substitution, fish).

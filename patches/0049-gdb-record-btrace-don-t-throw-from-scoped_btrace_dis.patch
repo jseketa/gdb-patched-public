@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 07:14:45 +0100
-Subject: [PATCH 48/66] gdb/record-btrace: don't throw from
+Subject: [PATCH 49/67] gdb/record-btrace: don't throw from
  ~scoped_btrace_disable
 
 A failed Qbtrace:off after a failed enable threw from a destructor and terminated GDB.

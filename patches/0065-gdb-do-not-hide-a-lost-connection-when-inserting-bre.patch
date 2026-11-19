@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 04:23:28 +0100
-Subject: [PATCH 64/66] gdb: do not hide a lost connection when inserting
+Subject: [PATCH 65/67] gdb: do not hide a lost connection when inserting
  breakpoints to keep going
 
 A lost connection while inserting breakpoints to keep stepping was a warning; GDB then asserted.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sun, 8 Nov 2026 07:59:14 +0100
-Subject: [PATCH 57/66] gdb/infrun: don't throw from the scope exit in
+Subject: [PATCH 58/67] gdb/infrun: don't throw from the scope exit in
  stop_all_threads
 
 A closed connection made QThreadEvents:0 throw from a destructor.

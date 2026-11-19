@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 18 Nov 2026 12:21:20 +0100
-Subject: [PATCH 34/66] gdb/remote: do not access memory of the wrong process
+Subject: [PATCH 34/67] gdb/remote: do not access memory of the wrong process
  after a rejected Hg
 
 GDB kept a thread the stub had rejected as selected, so memory accesses went to another process.
