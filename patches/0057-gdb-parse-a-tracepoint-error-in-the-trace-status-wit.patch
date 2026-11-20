@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Tue, 17 Nov 2026 22:21:27 +0100
-Subject: [PATCH 56/64] gdb: parse a tracepoint error in the trace status
+Subject: [PATCH 57/65] gdb: parse a tracepoint error in the trace status
  without a description
 
 "terror:41" sized an allocation from a null pointer.

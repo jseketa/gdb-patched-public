@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 01:36:34 +0100
-Subject: [PATCH 64/64] gdb: do not read past the symbols when BFD fails to
+Subject: [PATCH 65/65] gdb: do not read past the symbols when BFD fails to
  read them
 
 A -1 symbol count was kept as unsigned, and GDB read past the dynamic symbol table.

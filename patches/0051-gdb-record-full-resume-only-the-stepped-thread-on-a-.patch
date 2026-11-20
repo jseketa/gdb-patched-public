@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 18:27:29 +0100
-Subject: [PATCH 51/64] gdb/record-full: resume only the stepped thread on a
+Subject: [PATCH 51/65] gdb/record-full: resume only the stepped thread on a
  non-stop target
 
 After a recorded step, record full resumed every thread on a non-stop target; remote.c asserted.

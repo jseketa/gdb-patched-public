@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 12:16:55 +0100
-Subject: [PATCH 20/64] gdb: an event whose process has gone is moot (PR
+Subject: [PATCH 20/65] gdb: an event whose process has gone is moot (PR
  gdb/18749)
 
 An error handling an event whose process had exited went to the prompt with threads stopped; GDB now waits for the exit.

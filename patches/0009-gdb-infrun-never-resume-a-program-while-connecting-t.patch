@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 23:24:28 +0100
-Subject: [PATCH 09/64] gdb/infrun: never resume a program while connecting to
+Subject: [PATCH 09/65] gdb/infrun: never resume a program while connecting to
  it
 
 Most event kinds at connect ended in keep_going, so the program ran, exec'd or exited before GDB had set it up.

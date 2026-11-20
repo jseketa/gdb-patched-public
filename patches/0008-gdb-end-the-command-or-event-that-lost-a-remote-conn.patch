@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 16:39:08 +0100
-Subject: [PATCH 08/64] gdb: end the command or event that lost a remote
+Subject: [PATCH 08/65] gdb: end the command or event that lost a remote
  connection with that error
 
 Code that turned the error into text hid the loss; the command or stop event that lost the connection now ends with that error.

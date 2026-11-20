@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 01:03:48 +0100
-Subject: [PATCH 25/64] gdb: do not lose a stop reply with an unavailable
+Subject: [PATCH 25/65] gdb: do not lose a stop reply with an unavailable
  register
 
 Accept 'x' digits for an expedited register in a stop reply.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 17:31:53 +0100
-Subject: [PATCH 16/64] gdb/nat: name the test for an LWP that has left its
+Subject: [PATCH 16/65] gdb/nat: name the test for an LWP that has left its
  ptrace-stop
 
 The same /proc test in linux-nat and gdbserver moves to linux_proc_lwp_left_trace_stop; no change in behavior.

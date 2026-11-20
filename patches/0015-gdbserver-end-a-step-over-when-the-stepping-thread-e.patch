@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 04:28:17 +0100
-Subject: [PATCH 15/64] gdbserver: end a step-over when the stepping thread
+Subject: [PATCH 15/65] gdbserver: end a step-over when the stepping thread
  execs
 
 Clear step_over_bkpt when exec deletes the process; gdbserver aborted otherwise (PR gdb/27020).

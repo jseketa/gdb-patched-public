@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 18:30:47 +0100
-Subject: [PATCH 52/64] gdb: do not throw out of the cleanup that clears the
+Subject: [PATCH 52/65] gdb: do not throw out of the cleanup that clears the
  symtab users
 
 A lost connection while reading symbols after an exec threw out of a scope exit; GDB aborted.

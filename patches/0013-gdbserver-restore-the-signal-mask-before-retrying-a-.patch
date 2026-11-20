@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 04:17:49 +0100
-Subject: [PATCH 13/64] gdbserver: restore the signal mask before retrying a
+Subject: [PATCH 13/65] gdbserver: restore the signal mask before retrying a
  wait
 
 The retry saved the blocked mask and sigsuspend then waited forever.

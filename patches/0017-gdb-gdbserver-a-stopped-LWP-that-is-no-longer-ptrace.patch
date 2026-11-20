@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 12:15:55 +0100
-Subject: [PATCH 17/64] gdb, gdbserver: a stopped LWP that is no longer
+Subject: [PATCH 17/65] gdb, gdbserver: a stopped LWP that is no longer
  ptrace-stopped is not alive
 
 thread_alive said threads killed by another thread's exit_group were alive until their status was collected.

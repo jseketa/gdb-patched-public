@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 16:38:58 +0100
-Subject: [PATCH 07/64] gdb/remote: defer unpushing the target when the
+Subject: [PATCH 07/65] gdb/remote: defer unpushing the target when the
  connection fails
 
 A lost connection unpushed the target inside the I/O functions while callers held its threads; it is now marked lost and unpushed at safe points.
