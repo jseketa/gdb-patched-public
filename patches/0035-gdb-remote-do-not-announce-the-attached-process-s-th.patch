@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Mon, 9 Nov 2026 17:54:58 +0100
+Subject: [PATCH 35/64] gdb/remote: do not announce the attached process's
+ thread before its symbols
+
+With a non-stop target, add the main thread silently, as all-stop does; attach-deleted-exec.exp failed with target-non-stop on.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 9d0efb1d59c..456e8cc6140 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -7253,6 +7253,35 @@ extended_remote_target::attach (const char *args, int from_tty)
+ 
+   if (target_is_non_stop_p ())
+     {
++      /* All-stop adds the main thread silently, below.  Do the same
++	 here, so the user is not told about the thread of the process
++	 that was just attached to, ahead of the "Reading symbols"
++	 lines.  Take it from the thread list: the thread of this
++	 process whose lwp is its pid, else its first thread.  Other
++	 threads are announced as update_thread_list adds them.  */
++      threads_listing_context context;
++      if (remote_get_threads_with_qxfer (&context)
++	  || remote_get_threads_with_qthreadinfo (&context)
++	  || remote_get_threads_with_ql (&context))
++	{
++	  const thread_item *main_thread = nullptr;
++	  for (const thread_item &item : context.items)
++	    if (item.ptid.pid () == pid)
++	      {
++		if (item.ptid.lwp () == pid)
++		  {
++		    main_thread = &item;
++		    break;
++		  }
++		if (main_thread == nullptr)
++		  main_thread = &item;
++	      }
++
++	  if (main_thread != nullptr)
++	    remote_add_thread (main_thread->ptid, THREAD_RUNNING,
++			       THREAD_INT_RUNNING, true);
++	}
++
+       /* Get list of threads.  */
+       update_thread_list ();
+ 

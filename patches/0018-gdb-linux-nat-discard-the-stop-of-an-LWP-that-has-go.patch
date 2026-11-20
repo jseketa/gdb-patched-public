@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 12:16:11 +0100
+Subject: [PATCH 18/64] gdb/linux-nat: discard the stop of an LWP that has gone
+
+Reading the registers of an LWP whose process had ended threw out of wait; the stop is now discarded.
+
+diff --git a/gdb/linux-nat.c b/gdb/linux-nat.c
+index f85236d22af..69aa73d2bd4 100644
+--- a/gdb/linux-nat.c
++++ b/gdb/linux-nat.c
+@@ -2704,7 +2704,7 @@ select_event_lwp_callback (struct lwp_info *lp, int *selector)
+    architecture.  */
+ 
+ static void
+-save_stop_reason (struct lwp_info *lp)
++save_stop_reason_1 (struct lwp_info *lp)
+ {
+   struct regcache *regcache;
+   struct gdbarch *gdbarch;
+@@ -3163,6 +3163,27 @@ linux_nat_filter_event (int lwpid, int status)
+   save_stop_reason (lp);
+ }
+ 
++/* Record why LP stopped (see save_stop_reason_1).  If LP has gone
++   meanwhile (another thread ended its process), reading its registers
++   fails.  The stop is then moot: check_ptrace_stopped_lwp_gone
++   discards it, and LP's exit comes next.  */
++
++static void
++save_stop_reason (struct lwp_info *lp)
++{
++  try
++    {
++      save_stop_reason_1 (lp);
++    }
++  catch (const gdb_exception_error &ex)
++    {
++      if (!check_ptrace_stopped_lwp_gone (lp))
++	throw;
++      linux_nat_debug_printf ("%s gone, discarding its stop: %s",
++			      lp->ptid.to_string ().c_str (), ex.what ());
++    }
++}
++
+ /* Detect zombie thread group leaders, and "exit" them.  We can't reap
+    their exits until all other threads in the group have exited.  */
+ 

@@ -1,0 +1,693 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 16:38:58 +0100
+Subject: [PATCH 07/64] gdb/remote: defer unpushing the target when the
+ connection fails
+
+A lost connection unpushed the target inside the I/O functions while callers held its threads; it is now marked lost and unpushed at safe points.
+
+diff --git a/gdb/main.c b/gdb/main.c
+index b9a11cc0f47..8d2176362d9 100644
+--- a/gdb/main.c
++++ b/gdb/main.c
+@@ -35,6 +35,7 @@
+ 
+ #include "interps.h"
+ #include "main.h"
++#include "remote.h"
+ #include "source.h"
+ #include "cli/cli-cmds.h"
+ #include "objfiles.h"
+@@ -433,6 +434,9 @@ start_event_loop ()
+ 	     whether display the prompt or not.  */
+ 	}
+ 
++      /* Nothing holds the state of any inferior here.  */
++      remote_unpush_lost_targets ();
++
+       if (result < 0)
+ 	break;
+     }
+@@ -501,6 +505,8 @@ catch_command_errors (catch_command_errors_const_ftype command,
+ 		      const char *arg, int from_tty,
+ 		      bool do_bp_actions = false)
+ {
++  int ret = 1;
++
+   try
+     {
+       int was_sync = current_ui->prompt_state == PROMPT_BLOCKED;
+@@ -519,10 +525,13 @@ catch_command_errors (catch_command_errors_const_ftype command,
+     }
+   catch (const gdb_exception &e)
+     {
+-      return handle_command_errors (e);
++      ret = handle_command_errors (e);
+     }
+ 
+-  return 1;
++  /* Nothing holds the state of any inferior here.  */
++  remote_unpush_lost_targets ();
++
++  return ret;
+ }
+ 
+ /* Adapter for symbol_file_add_main that translates 'from_tty' to a
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 132840259b3..6319dd22ecf 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -561,6 +561,11 @@ class remote_state
+ 
+   bool is_async_p () const
+   {
++    /* Once the connection is lost, the event loop no longer watches the
++       serial device, but we stay async if we were.  */
++    if (this->connection_lost)
++      return this->lost_async;
++
+     /* We're async whenever the serial device is.  */
+     gdb_assert (this->remote_desc != nullptr);
+     return serial_is_async_p (this->remote_desc);
+@@ -587,6 +592,14 @@ class remote_state
+      about the remote side's threads, relocating symbols, etc.).  */
+   bool starting_up = false;
+ 
++  /* True once the connection has failed.  The target stays pushed until
++     remote_unpush_lost_targets is called, but every use of the
++     connection throws TARGET_CLOSE_ERROR without doing any I/O.  */
++  bool connection_lost = false;
++
++  /* Whether we are async, once the connection is lost.  */
++  bool lost_async = false;
++
+   /* If we negotiated packet size explicitly (and thus can bypass
+      heuristics for the largest packet size that will not overflow
+      a buffer in the stub), this will be set to that packet size.
+@@ -1507,6 +1520,8 @@ class remote_target : public process_stratum_target
+   int remote_vkill (int pid);
+   void remote_kill_k ();
+ 
++  bool connection_lost_error (const gdb_exception_error &ex);
++
+   void extended_remote_disable_randomization (int val);
+   int extended_remote_run (const std::string &remote_exec_file,
+ 			   const std::string &args);
+@@ -3337,6 +3352,7 @@ record_currthread (struct remote_state *rs, ptid_t currthread)
+ 
+ void
+ remote_target::pass_signals (gdb::array_view<const unsigned char> pass_signals)
++try
+ {
+   if (m_features.packet_support (PACKET_QPassSignals) != PACKET_DISABLE)
+     {
+@@ -3380,6 +3396,11 @@ remote_target::pass_signals (gdb::array_view<const unsigned char> pass_signals)
+ 	xfree (pass_packet);
+     }
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* If 'QCatchSyscalls' is supported, tell the remote stub
+    to report syscalls to GDB.  */
+@@ -3397,6 +3418,11 @@ remote_target::set_syscall_catchpoint (int pid, bool needed, int any_count,
+       return 1;
+     }
+ 
++  /* Turning syscall catching off is an undo: nothing to do on a lost
++     connection (see connection_lost_error).  */
++  if (!needed && get_remote_state ()->connection_lost)
++    return 0;
++
+   if (needed && any_count == 0)
+     {
+       /* Count how many syscalls are to be caught.  */
+@@ -3456,6 +3482,7 @@ remote_target::set_syscall_catchpoint (int pid, bool needed, int any_count,
+ 
+ void
+ remote_target::program_signals (gdb::array_view<const unsigned char> signals)
++try
+ {
+   if (m_features.packet_support (PACKET_QProgramSignals) != PACKET_DISABLE)
+     {
+@@ -3500,6 +3527,11 @@ remote_target::program_signals (gdb::array_view<const unsigned char> signals)
+ 	xfree (packet);
+     }
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* If PTID is MAGIC_NULL_PTID, don't set any thread.  If PTID is
+    MINUS_ONE_PTID, set the thread to -1, so the stub returns the
+@@ -5874,6 +5906,7 @@ init_all_packet_configs (void)
+ 
+ void
+ remote_target::remote_check_symbols ()
++try
+ {
+   char *tmp;
+   int end;
+@@ -5931,6 +5964,11 @@ remote_target::remote_check_symbols ()
+       getpkt (&reply);
+     }
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ static struct serial *
+ remote_serial_open (const char *name)
+@@ -6527,6 +6565,15 @@ remote_serial_quit_handler ()
+   curr_quit_handler_target->remote_serial_quit_handler ();
+ }
+ 
++/* The remote targets whose connection failed and that are still
++   pushed.  See remote_connection_failed.  Never destroyed: a
++   reference released by a static destructor would reach the
++   connection list after its own destruction.  quit_force unpushes
++   them before GDB exits.  */
++
++static std::vector<target_ops_ref> &lost_remote_targets
++  = *new std::vector<target_ops_ref>;
++
+ /* Remove the remote target from the target stack of each inferior
+    that is using it.  Upper targets depend on it so remove them
+    first.  */
+@@ -6534,6 +6581,18 @@ remote_serial_quit_handler ()
+ static void
+ remote_unpush_target (remote_target *target)
+ {
++  /* If TARGET's connection is lost, TARGET no longer waits to be
++     unpushed at a safe point, however it gets unpushed here (kill,
++     detach, disconnect, ...).  The list's reference may be the last
++     one; keep TARGET alive until the end.  */
++  target_ops_ref keep = target_ops_ref::new_reference (target);
++  lost_remote_targets.erase
++    (std::remove_if (lost_remote_targets.begin (),
++		     lost_remote_targets.end (),
++		     [target] (const target_ops_ref &ref)
++		     { return ref.get () == target; }),
++     lost_remote_targets.end ());
++
+   /* We have to unpush the target from all inferiors, even those that
+      aren't running.  */
+   scoped_restore_current_inferior restore_current_inferior;
+@@ -6574,10 +6633,96 @@ remote_unpush_target (remote_target *target)
+   fileio_handles_invalidate_target (target);
+ }
+ 
++/* The connection of TARGET has failed, or the user gave up on it.  The
++   caller throws TARGET_CLOSE_ERROR.
++
++   Do not unpush TARGET here: that would delete the threads and the
++   rest of the state of its inferiors, which the code up the stack, the
++   code that used the connection, still holds.  Mark the connection
++   lost instead, so that every later use of it throws without doing
++   any I/O, and unpush TARGET at a point where nothing holds its state:
++   see remote_unpush_lost_targets.  */
++
++static void
++remote_connection_failed (remote_target *target)
++{
++  remote_state *rs = target->get_remote_state ();
++
++  if (rs->connection_lost)
++    return;
++
++  /* Nothing more is coming from the connection; don't let the event
++     loop watch it.  */
++  rs->lost_async = (rs->remote_desc != nullptr
++		    && serial_is_async_p (rs->remote_desc));
++  if (rs->lost_async)
++    serial_async (rs->remote_desc, nullptr, nullptr);
++  rs->connection_lost = true;
++
++  /* If something waits for an event from this target, have the event
++     loop call its wait method, which throws.  */
++  if (rs->lost_async)
++    rs->mark_async_event_handler ();
++
++  /* The files open on the target are gone; closing them must not try
++     to talk to it.  */
++  fileio_handles_invalidate_target (target);
++
++  lost_remote_targets.push_back (target_ops_ref::new_reference (target));
++}
++
++/* Throw TARGET_CLOSE_ERROR if the connection of the remote target RS
++   belongs to has been lost.  */
++
++static void
++check_connection_lost (remote_state *rs)
++{
++  if (rs->connection_lost)
++    throw_error (TARGET_CLOSE_ERROR, _("Remote connection closed"));
++}
++
++/* Whether EX is the error of the lost connection of this target.
++
++   Operations that only undo something on the remote side or tell it
++   something (remove a breakpoint, stop, close a file, ...) have nothing
++   to do once the connection is lost, so they catch this error and
++   return as if they had succeeded, also when they are the ones that
++   find the loss.  Their callers, often cleanups, then go on with their
++   own work instead of being cut short.  The next operation that needs
++   the connection (read, write, resume, wait) throws.  */
++
++bool
++remote_target::connection_lost_error (const gdb_exception_error &ex)
++{
++  return (ex.error == TARGET_CLOSE_ERROR
++	  && get_remote_state ()->connection_lost);
++}
++
++/* See remote.h.  */
++
++void
++remote_unpush_lost_targets ()
++{
++  while (!lost_remote_targets.empty ())
++    {
++      target_ops_ref ref = std::move (lost_remote_targets.back ());
++      lost_remote_targets.pop_back ();
++
++      try
++	{
++	  remote_unpush_target (static_cast<remote_target *> (ref.get ()));
++	}
++      catch (const gdb_exception_error &ex)
++	{
++	  exception_print (gdb_stderr, ex);
++	}
++    }
++}
++
+ [[noreturn]] static void
+ remote_unpush_and_throw (remote_target *target)
+ {
+-  remote_unpush_target (target);
++  remote_connection_failed (target);
+   throw_error (TARGET_CLOSE_ERROR, _("Disconnected from target."));
+ }
+ 
+@@ -6852,6 +6997,14 @@ remote_target::remote_detach_1 (inferior *inf, int from_tty)
+   struct remote_state *rs = get_remote_state ();
+   int is_fork_parent;
+ 
++  /* As in kill: the program is out of reach, there is nothing left to
++     detach from.  */
++  if (rs->connection_lost)
++    {
++      remote_unpush_target (this);
++      return;
++    }
++
+   if (!target_has_execution ())
+     error (_("No process to detach from."));
+ 
+@@ -7622,6 +7775,7 @@ vcont_builder::push_action (ptid_t ptid, bool step, gdb_signal siggnal)
+ 
+ void
+ remote_target::commit_resumed ()
++try
+ {
+   /* If connected in all-stop mode, we'd send the remote resume
+      request directly from remote_resume.  Likewise if
+@@ -7806,6 +7960,11 @@ remote_target::commit_resumed ()
+ 
+   vcont_builder.flush ();
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* Implementation of target_has_pending_events.  */
+ 
+@@ -8006,6 +8165,7 @@ remote_target::remote_interrupt_ns ()
+ 
+ void
+ remote_target::stop (ptid_t ptid)
++try
+ {
+   REMOTE_SCOPED_DEBUG_ENTER_EXIT;
+ 
+@@ -8018,11 +8178,17 @@ remote_target::stop (ptid_t ptid)
+       remote_interrupt_as ();
+     }
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* Implement the to_interrupt function for the remote targets.  */
+ 
+ void
+ remote_target::interrupt ()
++try
+ {
+   REMOTE_SCOPED_DEBUG_ENTER_EXIT;
+ 
+@@ -8031,11 +8197,17 @@ remote_target::interrupt ()
+   else
+     remote_interrupt_as ();
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* Implement the to_pass_ctrlc function for the remote targets.  */
+ 
+ void
+ remote_target::pass_ctrlc ()
++try
+ {
+   REMOTE_SCOPED_DEBUG_ENTER_EXIT;
+ 
+@@ -8051,6 +8223,11 @@ remote_target::pass_ctrlc ()
+   else
+     target_interrupt ();
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* Ask the user what to do when an interrupt is received.  */
+ 
+@@ -8063,10 +8240,7 @@ remote_target::interrupt_query ()
+     {
+       if (query (_("The target is not responding to interrupt requests.\n"
+ 		   "Stop debugging it? ")))
+-	{
+-	  remote_unpush_target (this);
+-	  throw_error (TARGET_CLOSE_ERROR, _("Disconnected from target."));
+-	}
++	remote_unpush_and_throw (this);
+     }
+   else
+     {
+@@ -9247,11 +9421,13 @@ remote_target::wait (ptid_t ptid, struct target_waitstatus *status,
+   /* Start by clearing the flag that asks for our wait method to be called,
+      we'll mark it again at the end if needed.  If the target is not in
+      async mode then the async token should not be marked.  */
+-  if (target_is_async_p ())
++  if (target_is_async_p () || rs->connection_lost)
+     rs->clear_async_event_handler ();
+   else
+     gdb_assert (!rs->async_event_handler_marked ());
+ 
++  check_connection_lost (rs);
++
+   ptid_t event_ptid;
+ 
+   if (target_is_non_stop_p ())
+@@ -10393,6 +10569,8 @@ remote_target::readchar (int timeout)
+   int ch;
+   struct remote_state *rs = get_remote_state ();
+ 
++  check_connection_lost (rs);
++
+   try
+     {
+       scoped_restore restore_quit_target
+@@ -10409,7 +10587,7 @@ remote_target::readchar (int timeout)
+     }
+   catch (const gdb_exception_error &ex)
+     {
+-      remote_unpush_target (this);
++      remote_connection_failed (this);
+       throw_error (TARGET_CLOSE_ERROR,
+ 		   _("Remote communication error.  "
+ 		     "Target disconnected: %s"),
+@@ -10421,7 +10599,7 @@ remote_target::readchar (int timeout)
+ 
+   if (ch == SERIAL_EOF)
+     {
+-      remote_unpush_target (this);
++      remote_connection_failed (this);
+       throw_error (TARGET_CLOSE_ERROR, _("Remote connection closed"));
+     }
+ 
+@@ -10444,6 +10622,8 @@ remote_target::remote_serial_write (const char *str, int len)
+   scoped_restore restore_quit
+     = make_scoped_restore (&quit_handler, ::remote_serial_quit_handler);
+ 
++  check_connection_lost (rs);
++
+   rs->got_ctrlc_during_io = 0;
+ 
+   try
+@@ -10452,7 +10632,7 @@ remote_target::remote_serial_write (const char *str, int len)
+     }
+   catch (const gdb_exception_error &ex)
+     {
+-      remote_unpush_target (this);
++      remote_connection_failed (this);
+       throw_error (TARGET_CLOSE_ERROR,
+ 		   _("Remote communication error.  "
+ 		     "Target disconnected: %s"),
+@@ -10468,13 +10648,15 @@ remote_target::remote_serial_send_break ()
+ {
+   struct remote_state *rs = get_remote_state ();
+ 
++  check_connection_lost (rs);
++
+   try
+     {
+       serial_send_break (rs->remote_desc);
+     }
+   catch (const gdb_exception_error &ex)
+     {
+-      remote_unpush_target (this);
++      remote_connection_failed (this);
+       throw_error (TARGET_CLOSE_ERROR,
+ 		   _("Remote communication error.  "
+ 		     "Target disconnected: %s"),
+@@ -10534,6 +10716,10 @@ remote_target::putpkt_binary (const char *buf, int cnt)
+   int tcount = 0;
+   char *p;
+ 
++  /* A lost connection is the reason to give, not the stop reply it
++     will never send.  */
++  check_connection_lost (rs);
++
+   /* Catch cases like trying to read memory or listing threads while
+      we're waiting for a stop reply.  The remote server wouldn't be
+      ready to handle this request, so we'd hang and timeout.  We don't
+@@ -10909,7 +11095,7 @@ remote_target::getpkt (gdb::char_vector *buf, bool forever, bool *is_notif)
+ 
+ 	      if (forever)	/* Watchdog went off?  Kill the target.  */
+ 		{
+-		  remote_unpush_target (this);
++		  remote_connection_failed (this);
+ 		  throw_error (TARGET_CLOSE_ERROR,
+ 			       _("Watchdog timeout has expired.  "
+ 				 "Target detached."));
+@@ -11047,6 +11233,17 @@ remote_target::kill_new_fork_children (inferior *inf)
+ void
+ remote_target::kill ()
+ {
++  /* If the connection is already lost, there is nothing left to kill:
++     the program is out of reach.  Unpush the target now; killing
++     deletes the inferior's threads anyway.  This lets the command that
++     lost the connection go on with "target remote", "run" or "attach",
++     which kill the program first.  */
++  if (get_remote_state ()->connection_lost)
++    {
++      remote_unpush_target (this);
++      return;
++    }
++
+   int res = -1;
+   inferior *inf = find_inferior_pid (this, inferior_ptid.pid ());
+ 
+@@ -11667,6 +11864,7 @@ int
+ remote_target::remove_breakpoint (struct gdbarch *gdbarch,
+ 				  struct bp_target_info *bp_tgt,
+ 				  enum remove_bp_reason reason)
++try
+ {
+   CORE_ADDR addr = bp_tgt->placed_address;
+   struct remote_state *rs = get_remote_state ();
+@@ -11697,6 +11895,12 @@ remote_target::remove_breakpoint (struct gdbarch *gdbarch,
+ 
+   return memory_remove_breakpoint (this, gdbarch, bp_tgt, reason);
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++  return 0;
++}
+ 
+ static enum Z_packet_type
+ watchpoint_to_Z_packet (int type)
+@@ -11770,6 +11974,7 @@ remote_target::watchpoint_addr_within_range (CORE_ADDR addr,
+ int
+ remote_target::remove_watchpoint (CORE_ADDR addr, int len,
+ 				  enum target_hw_bp_type type, struct expression *cond)
++try
+ {
+   struct remote_state *rs = get_remote_state ();
+   char *endbuf = rs->buf.data () + get_remote_packet_size ();
+@@ -11804,6 +12009,12 @@ remote_target::remove_watchpoint (CORE_ADDR addr, int len,
+     }
+   internal_error (_("remote_remove_watchpoint: reached end of function"));
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++  return 0;
++}
+ 
+ 
+ static int remote_hw_watchpoint_limit = -1;
+@@ -11968,6 +12179,7 @@ remote_target::insert_hw_breakpoint (struct gdbarch *gdbarch,
+ int
+ remote_target::remove_hw_breakpoint (struct gdbarch *gdbarch,
+ 				     struct bp_target_info *bp_tgt)
++try
+ {
+   CORE_ADDR addr;
+   struct remote_state *rs = get_remote_state ();
+@@ -12003,6 +12215,12 @@ remote_target::remove_hw_breakpoint (struct gdbarch *gdbarch,
+     }
+   internal_error (_("remote_remove_hw_breakpoint: reached end of function"));
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++  return 0;
++}
+ 
+ /* Verify memory using the "qCRC:" request.  */
+ 
+@@ -13615,9 +13833,16 @@ remote_target::remote_hostio_close (int fd, fileio_error *remote_errno)
+ 
+ int
+ remote_target::fileio_close (int fd, fileio_error *remote_errno)
++try
+ {
+   return remote_hostio_close (fd, remote_errno);
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++  return 0;
++}
+ 
+ /* Implementation of to_fileio_unlink.  */
+ 
+@@ -14665,6 +14890,10 @@ remote_target::get_trace_status (struct trace_status *ts)
+   if (m_features.packet_support (PACKET_qTStatus) == PACKET_DISABLE)
+     return -1;
+ 
++  /* Nothing is known about a trace on a lost connection.  */
++  if (rs->connection_lost)
++    return -1;
++
+   /* FIXME we need to get register block size some other way.  */
+   trace_regblock_size
+     = rs->get_remote_arch_state (current_inferior ()->arch ())->sizeof_g_packet;
+@@ -15960,6 +16189,15 @@ remote_target::async (bool enable)
+ 
+   if (enable)
+     {
++      /* Nothing more is coming from a lost connection; but have the
++	 event loop call the wait method, which throws.  */
++      if (rs->connection_lost)
++	{
++	  rs->lost_async = true;
++	  rs->mark_async_event_handler ();
++	  return;
++	}
++
+       serial_async (rs->remote_desc, remote_async_serial_handler, rs);
+ 
+       /* If there are pending events in the stop reply queue tell the
+@@ -15977,6 +16215,9 @@ remote_target::async (bool enable)
+     }
+   else
+     {
++      if (rs->connection_lost)
++	rs->lost_async = false;
++      else
+       serial_async (rs->remote_desc, NULL, NULL);
+       /* If the core is disabling async, it doesn't want to be
+ 	 disturbed with target events.  Clear all async event sources
+@@ -15992,6 +16233,7 @@ remote_target::async (bool enable)
+ 
+ void
+ remote_target::thread_events (bool enable)
++try
+ {
+   struct remote_state *rs = get_remote_state ();
+   size_t size = get_remote_packet_size ();
+@@ -16021,6 +16263,11 @@ remote_target::thread_events (bool enable)
+       break;
+     }
+ }
++catch (const gdb_exception_error &ex)
++{
++  if (!connection_lost_error (ex))
++    throw;
++}
+ 
+ /* Implementation of the supports_set_thread_options target
+    method.  */
+diff --git a/gdb/remote.h b/gdb/remote.h
+index 4e61c9c88e3..249a9057845 100644
+--- a/gdb/remote.h
++++ b/gdb/remote.h
+@@ -126,4 +126,10 @@ extern bool is_remote_target (process_stratum_target *target);
+ 
+ extern bool remote_register_is_expedited (int regnum);
+ 
++/* Unpush the remote targets whose connection has failed since the
++   last call.  To be called where no code holds the state of their
++   inferiors (threads, frames, ...): between commands and events.  */
++
++extern void remote_unpush_lost_targets ();
++
+ #endif /* GDB_REMOTE_H */
+diff --git a/gdb/top.c b/gdb/top.c
+index 18d4bfcd4fd..5f4989138b4 100644
+--- a/gdb/top.c
++++ b/gdb/top.c
+@@ -28,6 +28,7 @@
+ #include <signal.h>
+ #include "target.h"
+ #include "target-dcache.h"
++#include "remote.h"
+ #include "breakpoint.h"
+ #include "gdbtypes.h"
+ #include "expression.h"
+@@ -1981,6 +1982,10 @@ quit_force (int *exit_arg, int from_tty)
+       exception_print (gdb_stderr, ex);
+     }
+ 
++  /* Killing or detaching may have found a lost remote connection;
++     this is the last point to unpush such targets.  */
++  remote_unpush_lost_targets ();
++
+   /* Give all pushed targets a chance to do minimal cleanup, and pop
+      them all out.  */
+   for (inferior *inf : all_inferiors ())

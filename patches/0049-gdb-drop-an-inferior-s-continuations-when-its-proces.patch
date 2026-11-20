@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:50:25 +0100
+Subject: [PATCH 49/64] gdb: drop an inferior's continuations when its process
+ is gone
+
+A non-stop attach that lost its connection left a continuation that ran at the next process's first stop.
+
+diff --git a/gdb/inferior.c b/gdb/inferior.c
+index 8c619ffec5a..e040d1b725a 100644
+--- a/gdb/inferior.c
++++ b/gdb/inferior.c
+@@ -194,6 +194,12 @@ inferior::do_all_continuations ()
+     }
+ }
+ 
++void
++inferior::clear_continuations ()
++{
++  m_continuations.clear ();
++}
++
+ /* Notify interpreters and observers that inferior INF was added.  */
+ 
+ static void
+@@ -333,6 +339,11 @@ exit_inferior (struct inferior *inf)
+   /* Reset it.  */
+   inf->control = inferior_control_state (NO_STOP_QUIETLY);
+ 
++  /* The continuations wait for a stop of the process that is gone.
++     Left in place, they would run at the next stop of whatever
++     process this inferior runs next.  */
++  inf->clear_continuations ();
++
+   /* Clear the register cache and the frame cache.  */
+   registers_changed ();
+   reinit_frame_cache ();
+diff --git a/gdb/inferior.h b/gdb/inferior.h
+index accd36740c3..cbf12c1f8da 100644
+--- a/gdb/inferior.h
++++ b/gdb/inferior.h
+@@ -535,6 +535,9 @@ class inferior : public refcounted_object,
+   void add_continuation (std::function<void ()> &&cont);
+   void do_all_continuations ();
+ 
++  /* Drop the continuations without calling them.  */
++  void clear_continuations ();
++
+   /* Set/get file name for default use for standard in/out in the inferior.
+ 
+      On Unix systems, we try to make TERMINAL_NAME the inferior's controlling

@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:39:55 +0100
+Subject: [PATCH 46/64] gdb/remote: keep the selected thread when a thread list
+ names a new process
+
+A process first named by the thread list read at a stop left GDB with no thread selected (inferior_thread assertion).
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index db4bbb81597..49f3d1735eb 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -3291,12 +3291,15 @@ remote_target::remote_notice_new_inferior (ptid_t currthread,
+ 	{
+ 	  bool fake_pid_p = !m_features.remote_multi_process_p ();
+ 
++	  /* Leave the selected thread and inferior unchanged:
++	     remote_add_inferior switches to the new inferior, and so
++	     does fetching its target description.  */
++	  scoped_restore_current_thread restore_thread;
++
+ 	  inf = remote_add_inferior (fake_pid_p,
+ 				     currthread.pid (), -1, 1);
+ 
+-	  /* Fetch the target description for this inferior.  Make sure to
+-	     leave the currently selected inferior unchanged.  */
+-	  scoped_restore_current_thread restore_thread;
++	  /* Fetch the target description for this inferior.  */
+ 	  switch_to_inferior_no_thread (inf);
+ 	  target_find_description ();
+ 	}

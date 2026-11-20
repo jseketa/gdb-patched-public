@@ -1,0 +1,156 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 12:16:55 +0100
+Subject: [PATCH 20/64] gdb: an event whose process has gone is moot (PR
+ gdb/18749)
+
+An error handling an event whose process had exited went to the prompt with threads stopped; GDB now waits for the exit.
+
+diff --git a/gdb/breakpoint.c b/gdb/breakpoint.c
+index a23f5998b20..ed455e40624 100644
+--- a/gdb/breakpoint.c
++++ b/gdb/breakpoint.c
+@@ -6053,6 +6053,15 @@ bpstat_check_breakpoint_conditions (bpstat *bs, thread_info *thread)
+ 	    }
+ 	  catch (const gdb_exception_error &ex)
+ 	    {
++	      /* If the thread has gone with its process (another thread
++		 ended it), the error is no fault of the condition, and
++		 the stop is moot: let infrun see the error.  Not if GDB
++		 has already handled the exit (the condition called a
++		 function that exited).  */
++	      if (thread->inf->pid != 0
++		  && !target_thread_alive (thread->ptid))
++		throw;
++
+ 	      int locno = bpstat_locno (bs);
+ 	      if (locno != 0)
+ 		exception_fprintf
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index c3ff1d6e0fb..931a29fb2dd 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -4634,6 +4634,105 @@ infrun_quit_handler ()
+     }
+ }
+ 
++/* Whether the event of ECS has become moot because its process is
++   gone: another thread ended the process after the target reported
++   the event (gdb/18749).  Handling such an event fails at the first
++   read or write of the process.  For a stop, the stopped thread has
++   gone; for the exit of a thread, no thread of the process is left.  */
++
++static bool
++event_process_gone (execution_control_state *ecs)
++{
++  if (ecs->ptid == null_ptid || ecs->ptid == minus_one_ptid)
++    return false;
++
++  /* If GDB has already handled the exit (e.g. the program exited in a
++     function GDB called), there is nothing to wait for.  */
++  inferior *inf = find_inferior_ptid (ecs->target, ecs->ptid);
++  if (inf == nullptr || inf->pid == 0)
++    return false;
++
++  try
++    {
++      if (ecs->ws.kind () == TARGET_WAITKIND_STOPPED)
++	return !target_thread_alive (ecs->ptid);
++
++      if (ecs->ws.kind () == TARGET_WAITKIND_THREAD_EXITED)
++	{
++	  for (thread_info &tp : inf->non_exited_threads ())
++	    if (tp.ptid != ecs->ptid && target_thread_alive (tp.ptid))
++	      return false;
++	  return true;
++	}
++    }
++  catch (const gdb_exception_error &)
++    {
++    }
++
++  return false;
++}
++
++/* The event of ECS could not be handled because its process has gone
++   (EX is the error that showed it).  The event is moot: do not stop.
++   Resume the threads GDB has stopped for it and wait for the next
++   event, which is what ended the process: its exit, or the exec of
++   another thread.  A thread GDB has stopped cannot end on its own.
++
++   Like restart_threads, but without reading the threads' registers or
++   memory: those of the gone process fail.  So the threads are resumed
++   as they are, not stepped over breakpoints; threads of other
++   processes that hit one report it again.  The targets discard errors
++   from resuming threads that are exiting.  */
++
++static void
++keep_waiting_for_exit (execution_control_state *ecs,
++		       const gdb_exception_error &ex)
++{
++  infrun_debug_printf ("event thread %s gone (%s), waiting for the exit",
++		       ecs->ptid.to_string ().c_str (), ex.what ());
++
++  /* In all-stop, GDB stopped every thread of the target for the event,
++     not only those of the event's process.  */
++  for (thread_info &tp : all_non_exited_threads (ecs->target))
++    {
++      /* As in restart_threads: leave alone threads the user stopped
++	 (non-stop) and threads waiting for a step-over, which
++	 start_step_over handles at the next stop.  */
++      if (tp.internal_state () != THREAD_INT_STOPPED
++	  || tp.state () != THREAD_RUNNING
++	  || thread_is_in_step_over_chain (&tp))
++	continue;
++
++      tp.set_stop_signal (GDB_SIGNAL_0);
++      if (tp.has_pending_waitstatus ())
++	{
++	  /* As in resume_1: the event loop must see the status.  */
++	  tp.inf->process_target ()->threads_executing = true;
++	  tp.set_internal_state (THREAD_INT_RESUMED_PENDING_STATUS);
++	  if (target_can_async_p ())
++	    {
++	      target_async (true);
++	      mark_async_event_handler (infrun_async_inferior_event_token);
++	    }
++	  continue;
++	}
++
++      switch_to_thread (&tp);
++      try
++	{
++	  target_resume (tp.ptid, false, GDB_SIGNAL_0);
++	}
++      catch (const gdb_exception_error &resume_ex)
++	{
++	  infrun_debug_printf ("resuming %s: %s",
++			       tp.ptid.to_string ().c_str (),
++			       resume_ex.what ());
++	}
++    }
++
++  prepare_to_wait (ecs);
++}
++
+ /* Asynchronous version of wait_for_inferior.  It is called by the
+    event loop whenever a change of state is detected on the file
+    descriptor corresponding to the target.  It can be called more than
+@@ -4760,7 +4859,16 @@ fetch_inferior_event ()
+     int stop_id = get_stop_id ();
+ 
+     /* Now figure out what to do with the result of the result.  */
+-    handle_inferior_event (&ecs);
++    try
++      {
++	handle_inferior_event (&ecs);
++      }
++    catch (const gdb_exception_error &ex)
++      {
++	if (!event_process_gone (&ecs))
++	  throw;
++	keep_waiting_for_exit (&ecs, ex);
++      }
+ 
+     if (!ecs.wait_some_more)
+       {

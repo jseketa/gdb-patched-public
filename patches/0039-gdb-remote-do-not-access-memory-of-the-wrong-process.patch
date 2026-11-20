@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 12:21:20 +0100
+Subject: [PATCH 39/64] gdb/remote: do not access memory of the wrong process
+ after a rejected Hg
+
+GDB kept a thread the stub had rejected as selected, so memory accesses went to another process.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index cb6538bd5a1..f41ca43be7d 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -1397,10 +1397,11 @@ class remote_target : public process_stratum_target
+   ptid_t remote_current_thread (ptid_t oldpid);
+   ptid_t get_current_thread (const char *wait_status);
+ 
+-  void set_thread (ptid_t ptid, int gen);
+-  void set_general_thread (ptid_t ptid);
++  bool set_thread (ptid_t ptid, int gen);
++  bool set_general_thread (ptid_t ptid);
+   void set_continue_thread (ptid_t ptid);
+   void set_general_process ();
++  bool select_process_of (ptid_t ptid);
+ 
+   char *write_ptid (char *buf, const char *endbuf, ptid_t ptid);
+ 
+@@ -3540,8 +3541,9 @@ catch (const gdb_exception_error &ex)
+ /* If PTID is MAGIC_NULL_PTID, don't set any thread.  If PTID is
+    MINUS_ONE_PTID, set the thread to -1, so the stub returns the
+    thread.  If GEN is set, set the general thread, if not, then set
+-   the step/continue thread.  */
+-void
++   the step/continue thread.  Return false if the stub rejected the
++   thread, e.g. because it has exited.  */
++bool
+ remote_target::set_thread (ptid_t ptid, int gen)
+ {
+   struct remote_state *rs = get_remote_state ();
+@@ -3550,7 +3552,7 @@ remote_target::set_thread (ptid_t ptid, int gen)
+   char *endbuf = buf + get_remote_packet_size ();
+ 
+   if (state == ptid)
+-    return;
++    return true;
+ 
+   *buf++ = 'H';
+   *buf++ = gen ? 'g' : 'c';
+@@ -3564,16 +3566,29 @@ remote_target::set_thread (ptid_t ptid, int gen)
+     write_ptid (buf, endbuf, ptid);
+   putpkt (rs->buf);
+   getpkt (&rs->buf);
++
++  /* If the stub rejected the thread, it still has the one selected
++     before, which may belong to another process.  Do not take that
++     for PTID, and send the packet again next time.  */
++  ptid_t selected = ptid;
++  bool ok = true;
++  if (rs->buf[0] == 'E')
++    {
++      selected = not_sent_ptid;
++      ok = false;
++    }
++
+   if (gen)
+-    rs->general_thread = ptid;
++    rs->general_thread = selected;
+   else
+-    rs->continue_thread = ptid;
++    rs->continue_thread = selected;
++  return ok;
+ }
+ 
+-void
++bool
+ remote_target::set_general_thread (ptid_t ptid)
+ {
+-  set_thread (ptid, 1);
++  return set_thread (ptid, 1);
+ }
+ 
+ void
+@@ -3602,8 +3617,30 @@ remote_target::set_general_process ()
+ 
+   /* We only need to change the remote current thread if it's pointing
+      at some other process.  */
+-  if (rs->general_thread.pid () != inferior_ptid.pid ())
+-    set_general_thread (inferior_ptid);
++  if (rs->general_thread.pid () == inferior_ptid.pid ())
++    return;
++
++  /* If the process has gone too, e.g. when GDB removes the
++     breakpoints of a process that has exited, carry on: the stub
++     keeps its old selection.  */
++  select_process_of (inferior_ptid);
++}
++
++/* Select PTID as the remote general thread, or, if the stub rejects
++   it, e.g. because the thread has exited, any thread of its process.
++   For operations that only need the process, like memory accesses.
++   Return false if the stub rejected both.  */
++
++bool
++remote_target::select_process_of (ptid_t ptid)
++{
++  if (set_general_thread (ptid))
++    return true;
++
++  if (!m_features.remote_multi_process_p () || ptid.pid () == 0)
++    return false;
++
++  return set_general_thread (ptid_t (ptid.pid ()));
+ }
+ 
+ 
+@@ -12656,7 +12693,6 @@ remote_target::xfer_partial (enum target_object object,
+     = gdbarch_addressable_memory_unit_size (current_inferior ()->arch ());
+ 
+   set_remote_traceframe ();
+-  set_general_thread (inferior_ptid);
+ 
+   rs = get_remote_state ();
+ 
+@@ -12669,6 +12705,13 @@ remote_target::xfer_partial (enum target_object object,
+       if (!target_has_execution ())
+ 	return TARGET_XFER_EOF;
+ 
++      /* Memory belongs to the process.  If the stub selects neither
++	 the thread nor its process, do not access the memory of
++	 whichever process it has selected.  */
++      if (!select_process_of (inferior_ptid)
++	  && m_features.remote_multi_process_p ())
++	return TARGET_XFER_E_IO;
++
+       if (writebuf != NULL)
+ 	return remote_write_bytes (offset, writebuf, len, unit_size,
+ 				   xfered_len);
+@@ -12677,6 +12720,8 @@ remote_target::xfer_partial (enum target_object object,
+ 				  xfered_len);
+     }
+ 
++  set_general_thread (inferior_ptid);
++
+   /* Handle extra signal info using qxfer packets.  */
+   if (object == TARGET_OBJECT_SIGNAL_INFO)
+     {

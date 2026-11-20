@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 20 Nov 2026 18:27:29 +0100
-Subject: [PATCH 50/72] gdb/compile: pass a struct's alignment to GCC in bits
+Subject: [PATCH 50/64] gdb/compile: pass a struct's alignment to GCC in bits
 
 The alignment went to libcc1 in bytes, which takes bits; compile print of a struct overwrote the frame.
 

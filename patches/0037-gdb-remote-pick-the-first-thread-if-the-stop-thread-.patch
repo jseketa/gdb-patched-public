@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 22:24:34 +0100
+Subject: [PATCH 37/64] gdb/remote: pick the first thread if the stop thread is
+ not listed
+
+A stop reply naming a thread missing from the list asserted in switch_to_thread at connect.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index f2afef27a1b..d5581779cd8 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -5662,15 +5662,26 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+ 	     multi-threaded program, this will ideally be the thread
+ 	     that last reported an event before GDB disconnected.  */
+ 	  ptid_t curr_thread = get_current_thread (wait_status);
+-	  if (curr_thread == null_ptid)
++	  thread_info *curr_tp = nullptr;
++	  if (curr_thread != null_ptid)
++	    curr_tp = this->find_thread (curr_thread);
++
++	  if (curr_tp == nullptr)
+ 	    {
+ 	      /* Odd... The target was able to list threads, but not
+ 		 tell us which thread was current (no "thread"
+-		 register in T stop reply?).  Just pick the first
+-		 thread in the thread list then.  */
++		 register in T stop reply?), or named a thread that
++		 is not in the list.  Just pick the first thread in
++		 the thread list then.  */
+ 
+-	      remote_debug_printf ("warning: couldn't determine remote "
+-				   "current thread; picking first in list.");
++	      if (curr_thread == null_ptid)
++		remote_debug_printf ("warning: couldn't determine remote "
++				     "current thread; picking first in list.");
++	      else
++		remote_debug_printf ("warning: remote current thread %s is "
++				     "not in the thread list; picking first "
++				     "in list.",
++				     curr_thread.to_string ().c_str ());
+ 
+ 	      for (thread_info &tp : all_non_exited_threads (this,
+ 							     minus_one_ptid))
+@@ -5680,7 +5691,7 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+ 		}
+ 	    }
+ 	  else
+-	    switch_to_thread (this->find_thread (curr_thread));
++	    switch_to_thread (curr_tp);
+ 
+ 	  get_remote_thread_info (inferior_thread ())->set_resumed ();
+ 	}

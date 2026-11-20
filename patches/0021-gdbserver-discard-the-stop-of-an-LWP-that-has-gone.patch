@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 13:15:56 +0100
+Subject: [PATCH 21/64] gdbserver: discard the stop of an LWP that has gone
+
+Reading a gone LWP's debug registers threw out of wait and dropped GDB's connection.
+
+diff --git a/gdbserver/linux-low.cc b/gdbserver/linux-low.cc
+index 0c69c1867a3..b3dc7b00e06 100644
+--- a/gdbserver/linux-low.cc
++++ b/gdbserver/linux-low.cc
+@@ -2468,14 +2468,27 @@ linux_process_target::filter_event (int lwpid, int wstat)
+ 	}
+     }
+ 
+-  if (linux_wstatus_maybe_breakpoint (wstat))
++  /* Reading CHILD's registers fails if another thread has ended its
++     process since CHILD stopped (e.g. with exit_group).  The stop is
++     then moot: check_ptrace_stopped_lwp_gone discards it, and CHILD's
++     exit comes next.  */
++  try
+     {
+-      if (save_stop_reason (child))
++      if (linux_wstatus_maybe_breakpoint (wstat)
++	  && save_stop_reason (child))
+ 	have_stop_pc = 1;
+-    }
+ 
+-  if (!have_stop_pc)
+-    child->stop_pc = get_pc (child);
++      if (!have_stop_pc)
++	child->stop_pc = get_pc (child);
++    }
++  catch (const gdb_exception_error &ex)
++    {
++      if (!check_ptrace_stopped_lwp_gone (child))
++	throw;
++      threads_debug_printf ("LWP %d gone, discarding its stop: %s",
++			    lwpid, ex.what ());
++      return;
++    }
+ 
+   if (WIFSTOPPED (wstat) && WSTOPSIG (wstat) == SIGSTOP
+       && child->stop_expected)

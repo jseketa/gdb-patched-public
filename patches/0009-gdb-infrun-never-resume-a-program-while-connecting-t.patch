@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 23:24:28 +0100
+Subject: [PATCH 09/64] gdb/infrun: never resume a program while connecting to
+ it
+
+Most event kinds at connect ended in keep_going, so the program ran, exec'd or exited before GDB had set it up.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 08919bc8a96..a3aff64171c 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -3913,6 +3913,7 @@ static void check_exception_resume (struct execution_control_state *,
+ static void end_stepping_range (struct execution_control_state *ecs);
+ static void stop_waiting (struct execution_control_state *ecs);
+ static void keep_going (struct execution_control_state *ecs);
++static bool stop_if_connecting (struct execution_control_state *ecs);
+ static void process_event_stop_test (struct execution_control_state *ecs);
+ static bool switch_back_to_stepped_thread (struct execution_control_state *ecs);
+ 
+@@ -6442,6 +6443,8 @@ handle_inferior_event (struct execution_control_state *ecs)
+       if (handle_stop_requested (ecs))
+ 	return;
+       context_switch (ecs);
++      if (stop_if_connecting (ecs))
++	return;
+       resume (GDB_SIGNAL_0);
+       prepare_to_wait (ecs);
+       return;
+@@ -9156,6 +9159,23 @@ stop_waiting (struct execution_control_state *ecs)
+   ecs->wait_some_more = 0;
+ }
+ 
++/* If GDB is connecting to the remote target of ECS's thread, stop
++   waiting and return true.  start_remote sets up the program where
++   the event left it: connecting must not resume it, whatever the
++   event is.  Return false otherwise.  */
++
++static bool
++stop_if_connecting (struct execution_control_state *ecs)
++{
++  if (get_inferior_stop_soon (ecs) != STOP_QUIETLY_REMOTE)
++    return false;
++
++  infrun_debug_printf ("connecting, not resuming");
++  stop_print_frame = true;
++  stop_waiting (ecs);
++  return true;
++}
++
+ /* Like keep_going, but passes the signal to the inferior, even if the
+    signal is set to nopass.  */
+ 
+@@ -9165,6 +9185,9 @@ keep_going_pass_signal (struct execution_control_state *ecs)
+   gdb_assert (ecs->event_thread->ptid == inferior_ptid);
+   gdb_assert (ecs->event_thread->internal_state () == THREAD_INT_STOPPED);
+ 
++  if (stop_if_connecting (ecs))
++    return;
++
+   /* Save the pc before execution, to compare with pc after stop.  */
+   ecs->event_thread->prev_pc
+     = regcache_read_pc_protected (get_thread_regcache (ecs->event_thread));

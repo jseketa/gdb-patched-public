@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 00:14:42 +0100
+Subject: [PATCH 23/64] gdb: do not assert on a stub reporting another thread
+ during a step-over
+
+A stub may report another thread when an in-line step-over ends.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index dcbeec23992..0b1e81c7859 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -6953,10 +6953,28 @@ finish_step_over (struct execution_control_state *ecs)
+     {
+       /* If we're stepping over a breakpoint with all threads locked,
+ 	 then only the thread that was stepped should be reporting
+-	 back an event.  */
+-      gdb_assert (ecs->event_thread->control.trap_expected);
++	 back an event.  But that is up to the target: a remote stub
++	 can report another thread, for example an RTOS-aware one when
++	 the step ended in a context switch.  In all-stop the whole
++	 target is stopped now, so just end the step-over.  With a
++	 non-stop target the stepped thread could still be running,
++	 and GDB itself decided what runs, so insist on this there.  */
++      thread_info *stepped_thread = ecs->event_thread;
+ 
+-      update_thread_events_after_step_over (ecs->event_thread, ecs->ws);
++      if (!stepped_thread->control.trap_expected)
++	{
++	  gdb_assert (!target_is_non_stop_p ());
++
++	  infrun_debug_printf ("event for %s during a step-over of "
++			       "another thread",
++			       stepped_thread->ptid.to_string ().c_str ());
++
++	  stepped_thread = find_thread_global_id (step_over_info.thread);
++	  gdb_assert (stepped_thread != nullptr);
++	  stepped_thread->control.trap_expected = 0;
++	}
++
++      update_thread_events_after_step_over (stepped_thread, ecs->ws);
+ 
+       clear_step_over_info ();
+     }
