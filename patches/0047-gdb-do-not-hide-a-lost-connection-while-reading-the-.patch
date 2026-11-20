@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 06:45:58 +0100
-Subject: [PATCH 47/69] gdb: do not hide a lost connection while reading the
+Subject: [PATCH 47/72] gdb: do not hide a lost connection while reading the
  dynamic linker's r_map
 
 A lost connection while reading r_debug.r_map during attach was printed and dropped; GDB then asserted.

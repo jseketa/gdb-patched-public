@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Wed, 4 Nov 2026 22:26:12 +0100
-Subject: [PATCH 01/69] gdb: print a pipe command's stderr when the connection
+Subject: [PATCH 01/72] gdb: print a pipe command's stderr when the connection
  is reset
 
 Since 0da23004a the ECONNRESET throw skips reading stderr, so the command's error message is lost; pipe_close now drains the error fd.

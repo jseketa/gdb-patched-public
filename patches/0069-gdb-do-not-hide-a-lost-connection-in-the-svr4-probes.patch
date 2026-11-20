@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 01:44:41 +0100
-Subject: [PATCH 66/69] gdb: do not hide a lost connection in the svr4 probes
+Subject: [PATCH 69/72] gdb: do not hide a lost connection in the svr4 probes
  interface
 
 A lost connection at a linker probe was a warning; GDB then used a deleted breakpoint.

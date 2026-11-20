@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 04:35:00 +0100
-Subject: [PATCH 69/69] gdb: do not hide a lost connection when inserting a
+Subject: [PATCH 72/72] gdb: do not hide a lost connection when inserting a
  momentary breakpoint
 
 With target-non-stop on, a lost connection while inserting a step-resume breakpoint was dropped.

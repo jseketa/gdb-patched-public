@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 18:27:29 +0100
+Subject: [PATCH 50/72] gdb/compile: pass a struct's alignment to GCC in bits
+
+The alignment went to libcc1 in bytes, which takes bits; compile print of a struct overwrote the frame.
+
+diff --git a/gdb/compile/compile-c-types.c b/gdb/compile/compile-c-types.c
+index 818cdecd50d..3e8734a007f 100644
+--- a/gdb/compile/compile-c-types.c
++++ b/gdb/compile/compile-c-types.c
+@@ -117,9 +117,10 @@ convert_struct_or_union (compile_c_instance *context, struct type *type)
+ 					  type->field (i).loc_bitpos ());
+     }
+ 
++  /* The plugin takes the alignment in bits, as GCC's TYPE_ALIGN.  */
+   if (context->plugin ().version () >= GCC_C_FE_VERSION_2)
+-    context->plugin ().finish_record_with_alignment (result, type->length (),
+-						     type_align (type));
++    context->plugin ().finish_record_with_alignment
++      (result, type->length (), type_align (type) * TARGET_CHAR_BIT);
+   else
+     context->plugin ().finish_record_or_union (result, type->length ());
+   return result;

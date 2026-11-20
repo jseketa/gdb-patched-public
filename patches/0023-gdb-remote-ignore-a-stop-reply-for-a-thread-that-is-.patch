@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Sat, 7 Nov 2026 21:31:59 +0100
-Subject: [PATCH 23/69] gdb/remote: ignore a stop reply for a thread that is
+Subject: [PATCH 23/72] gdb/remote: ignore a stop reply for a thread that is
  not resumed
 
 A duplicate stop reply in non-stop hit a skip_inline_frames assertion.

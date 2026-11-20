@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Thu, 19 Nov 2026 01:48:49 +0100
-Subject: [PATCH 46/69] gdb: do not resume a program stopped at an exec while
+Subject: [PATCH 46/72] gdb: do not resume a program stopped at an exec while
  connecting
 
 Reconnecting at an exec catchpoint resumed the program and asserted in post_create_inferior.

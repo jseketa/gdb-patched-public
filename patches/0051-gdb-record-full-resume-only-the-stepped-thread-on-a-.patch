@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 18:27:29 +0100
+Subject: [PATCH 51/72] gdb/record-full: resume only the stepped thread on a
+ non-stop target
+
+After a recorded step, record full resumed every thread on a non-stop target; remote.c asserted.
+
+diff --git a/gdb/record-full.c b/gdb/record-full.c
+index 7b1d64069c7..ea96dd11a64 100644
+--- a/gdb/record-full.c
++++ b/gdb/record-full.c
+@@ -1298,7 +1298,16 @@ record_full_wait_1 (struct target_ops *ops,
+ 				    "Process record: record_full_wait "
+ 				    "issuing one more step in the "
+ 				    "target beneath\n");
+-		      ops->beneath ()->resume (ptid, step, GDB_SIGNAL_0);
++
++		      /* An all-stop target stopped all threads for this
++			 event; resume them as they were.  A non-stop
++			 target stopped only the thread that stepped (RET,
++			 now the current thread), and resumes one thread
++			 at a time.  */
++		      ptid_t resume_ptid = (target_is_non_stop_p ()
++					    ? inferior_ptid : ptid);
++		      ops->beneath ()->resume (resume_ptid, step,
++					       GDB_SIGNAL_0);
+ 		      proc_target->commit_resumed_state = true;
+ 		      proc_target->commit_resumed ();
+ 		      proc_target->commit_resumed_state = false;
