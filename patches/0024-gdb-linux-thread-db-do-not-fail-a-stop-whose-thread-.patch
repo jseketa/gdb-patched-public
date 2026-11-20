@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 12:16:24 +0100
+Subject: [PATCH 24/76] gdb/linux-thread-db: do not fail a stop whose thread
+ has gone
+
+libthread_db not finding a gone thread's LWP threw out of wait; the event now goes on to infrun.
+
+diff --git a/gdb/linux-thread-db.c b/gdb/linux-thread-db.c
+index 5a7c39b9cef..5e63c49b433 100644
+--- a/gdb/linux-thread-db.c
++++ b/gdb/linux-thread-db.c
+@@ -1410,8 +1410,19 @@ thread_db_target::wait (ptid_t ptid, struct target_waitstatus *ourstatus,
+   if (info == NULL)
+     return ptid;
+ 
+-  /* Fill in the thread's user-level thread id and status.  */
+-  thread_from_lwp (beneath->find_thread (ptid), ptid);
++  /* Fill in the thread's user-level thread id and status.  If the
++     thread has gone meanwhile (another thread ended its process),
++     libthread_db no longer finds it: leave it as it is, its exit comes
++     next.  */
++  try
++    {
++      thread_from_lwp (beneath->find_thread (ptid), ptid);
++    }
++  catch (const gdb_exception_error &)
++    {
++      if (beneath->thread_alive (ptid))
++	throw;
++    }
+ 
+   return ptid;
+ }

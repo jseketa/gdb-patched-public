@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 19:20:03 +0100
+Subject: [PATCH 08/76] gdb/testsuite: set up the new inferior in
+ remove-inferiors.exp
+
+"set remote exec-file" is per inferior; the test removed inferior 1 and ran the program in one without it.
+
+diff --git a/gdb/testsuite/gdb.multi/remove-inferiors.exp b/gdb/testsuite/gdb.multi/remove-inferiors.exp
+index ae2ecdffb83..2514ec392d8 100644
+--- a/gdb/testsuite/gdb.multi/remove-inferiors.exp
++++ b/gdb/testsuite/gdb.multi/remove-inferiors.exp
+@@ -46,12 +46,12 @@ proc test_remove_inferiors { } {
+     # Test that it is possible to remove a non-active non-current inferior.
+     gdb_test_no_output "remove-inferiors 1" "remove non-current inferior"
+ 
+-    # Load binfile and start the inferior.
+-    set binfile_re [string_to_regexp ${binfile}]
+-    gdb_test "file ${binfile}" \
+-	[multi_line "Reading symbols from ${binfile_re}\.\.\.(" \
+-	     "Expanding full symbols from ${binfile_re}\.\.\.)?" ] \
+-	"load binary"
++    # Load binfile and start the inferior.  Use gdb_load, so that the
++    # board sets this inferior up too: the remote exec-file is per
++    # inferior.
++    if {[gdb_load ${binfile}] != 0} {
++	return
++    }
+ 
+     if {![runto_main]} {
+ 	return

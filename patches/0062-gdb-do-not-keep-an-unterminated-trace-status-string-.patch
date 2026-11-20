@@ -1,0 +1,238 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 21:40:21 +0100
+Subject: [PATCH 62/76] gdb: do not keep an unterminated trace status string
+ after a bad hex digit
+
+A non-hex username/notes left an unterminated string that tsave read past.
+
+diff --git a/gdb/testsuite/gdb.replay/tstatus-malformed.exp b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+new file mode 100644
+index 00000000000..05a80573d0c
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+@@ -0,0 +1,148 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test qTStatus replies that GDB cannot parse as they are.  GDB asks
++# for the trace status while connecting; the reply to that is replaced
++# in a recorded session.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile connect.c
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Connect to gdbserver with a remote log in LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "disconnect" ".*" "disconnect after recording"
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME up to GDB's first qTStatus
++# packet, and give it REPLY.  The log ends there.  Return true if the
++# qTStatus packet was found.
++proc make_replay_log { in_filename out_filename reply } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set i [lsearch -regexp $lines {^w \+?\$qTStatus#}]
++    if { $i == -1 } {
++	return false
++    }
++
++    # gdbreplay adds the checksum.
++    set lines [lrange $lines 0 $i]
++    lappend lines "r \$$reply"
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++# Replay the log in IN_FILENAME with REPLY to qTStatus, connecting with
++# the command "target ...", whose output must match CONNECT_RE.
++proc replay_with_reply { in_filename reply connect_re } {
++    set log [standard_output_file replay-[string map {: - ; -} $reply].log]
++    if { ![make_replay_log $in_filename $log $reply] } {
++	fail "couldn't make the replay log"
++	return false
++    }
++
++    clean_restart $::testfile
++
++    gdb_test "disconnect" ".*"
++    gdb_test_no_output "set sysroot"
++
++    set res [gdbreplay_start $log]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test "target $protocol $port" $connect_re "connect"
++    return true
++}
++
++# Return what "tsave" wrote to TFILE.  If it wrote nothing, for
++# example because GDB died while saving, record a FAIL and return the
++# empty string.
++
++proc saved_trace_file { tfile } {
++    if { ![file exists $tfile] } {
++	fail "tsave wrote the trace file"
++	return ""
++    }
++
++    set fd [open $tfile]
++    set contents [read $fd]
++    close $fd
++    return $contents
++}
++
++set remote_log [standard_output_file replay.log]
++
++record_initial_logfile $remote_log
++
++# A username that is not hex.  GDB gives an error while it decodes it,
++# and must not keep the string it was decoding into: that string has no
++# terminating null.  GDB used to keep it, and "tsave" then wrote it out,
++# reading past the end of the buffer.
++with_test_prefix "username not hex" {
++    if { [replay_with_reply $remote_log \
++	      "T0;tnotrun:0;tframes:0;username:foo" \
++	      "Invalid hex digit 111.*"] } {
++	set tfile [standard_output_file saved.tf]
++
++	# The connection is gone, so this saves the trace status GDB has.
++	# It fails later, at the tracepoints, but the status is written
++	# first.
++	file delete $tfile
++	gdb_test "tsave $tfile" ".*" "tsave"
++
++	set contents [saved_trace_file $tfile]
++
++	gdb_assert { [regexp {(^|\n)status } $contents] } \
++	    "the trace file has the status"
++	gdb_assert { ![regexp {username:} $contents] } \
++	    "the status has no username"
++    }
++}
+diff --git a/gdb/tracepoint.c b/gdb/tracepoint.c
+index d903887e3ac..3ef632dc21d 100644
+--- a/gdb/tracepoint.c
++++ b/gdb/tracepoint.c
+@@ -3214,6 +3214,21 @@ merge_uploaded_trace_state_variables (struct uploaded_tsv **uploaded_tsvs)
+   free_uploaded_tsvs (uploaded_tsvs);
+ }
+ 
++/* Return a new string decoded from the hex digits from HEX up to END.
++   Decoding throws on a character that is not a hex digit (fromhex);
++   the caller is then left with nothing, rather than with a buffer that
++   has no terminator.  */
++
++static char *
++hex_field_to_string (const char *hex, const char *end)
++{
++  int count = end > hex ? (end - hex) / 2 : 0;
++  gdb::unique_xmalloc_ptr<char> str ((char *) xmalloc (count + 1));
++  int len = hex2bin (hex, (gdb_byte *) str.get (), count);
++  str.get ()[len] = '\0';
++  return str.release ();
++}
++
+ /* Parse the part of trace status syntax that is shared between
+    the remote protocol and the trace file reader.  */
+ 
+@@ -3221,7 +3236,6 @@ void
+ parse_trace_status (const char *line, struct trace_status *ts)
+ {
+   const char *p = line, *p1, *p2, *p3, *p_temp;
+-  int end;
+   ULONGEST val;
+ 
+   ts->running_known = 1;
+@@ -3277,9 +3291,7 @@ Status line: '%s'\n"), p, line);
+ 	    }
+ 	  else if (p2 != p1)
+ 	    {
+-	      ts->stop_desc = (char *) xmalloc (strlen (line));
+-	      end = hex2bin (p1, (gdb_byte *) ts->stop_desc, (p2 - p1) / 2);
+-	      ts->stop_desc[end] = '\0';
++	      ts->stop_desc = hex_field_to_string (p1, p2);
+ 	    }
+ 	  else
+ 	    ts->stop_desc = xstrdup ("");
+@@ -3297,9 +3309,7 @@ Status line: '%s'\n"), p, line);
+ 	  p2 = strchr (++p1, ':');
+ 	  if (p2 != p1)
+ 	    {
+-	      ts->stop_desc = (char *) xmalloc ((p2 - p1) / 2 + 1);
+-	      end = hex2bin (p1, (gdb_byte *) ts->stop_desc, (p2 - p1) / 2);
+-	      ts->stop_desc[end] = '\0';
++	      ts->stop_desc = hex_field_to_string (p1, p2);
+ 	    }
+ 	  else
+ 	    ts->stop_desc = xstrdup ("");
+@@ -3351,17 +3361,13 @@ Status line: '%s'\n"), p, line);
+       else if (strncmp (p, "username", p1 - p) == 0)
+ 	{
+ 	  ++p1;
+-	  ts->user_name = (char *) xmalloc (strlen (p) / 2);
+-	  end = hex2bin (p1, (gdb_byte *) ts->user_name, (p3 - p1)  / 2);
+-	  ts->user_name[end] = '\0';
++	  ts->user_name = hex_field_to_string (p1, p3);
+ 	  p = p3;
+ 	}
+       else if (strncmp (p, "notes", p1 - p) == 0)
+ 	{
+ 	  ++p1;
+-	  ts->notes = (char *) xmalloc (strlen (p) / 2);
+-	  end = hex2bin (p1, (gdb_byte *) ts->notes, (p3 - p1) / 2);
+-	  ts->notes[end] = '\0';
++	  ts->notes = hex_field_to_string (p1, p3);
+ 	  p = p3;
+ 	}
+       else

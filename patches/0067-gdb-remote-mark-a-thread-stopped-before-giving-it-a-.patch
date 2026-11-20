@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 19:04:18 +0100
+Subject: [PATCH 67/76] gdb/remote: mark a thread stopped before giving it a
+ pending status
+
+Assertion when connecting to a non-stop target with a thread stopped by a signal.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index db20e4f4be1..2c35ad8c863 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -5254,13 +5254,15 @@ remote_target::process_initial_stop_replies (int from_tty)
+ 	  ws.set_stopped (sig);
+ 	}
+ 
+-      if (ws.kind () != TARGET_WAITKIND_STOPPED
+-	  || ws.sig () != GDB_SIGNAL_0)
+-	evthread->set_pending_waitstatus (ws);
+-
++      /* The thread was added as running; mark it stopped first, as a
++	 pending status only goes on a stopped thread.  */
+       set_internal_state (this, event_ptid, THREAD_INT_STOPPED);
+       set_state (this, event_ptid, THREAD_STOPPED);
+       get_remote_thread_info (evthread)->set_not_resumed ();
++
++      if (ws.kind () != TARGET_WAITKIND_STOPPED
++	  || ws.sig () != GDB_SIGNAL_0)
++	evthread->set_pending_waitstatus (ws);
+     }
+ 
+   /* "Notice" the new inferiors before anything related to

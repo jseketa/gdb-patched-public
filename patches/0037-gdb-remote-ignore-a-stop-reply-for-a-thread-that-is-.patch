@@ -1,0 +1,288 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 21:31:59 +0100
+Subject: [PATCH 37/76] gdb/remote: ignore a stop reply for a thread that is
+ not resumed
+
+A duplicate stop reply in non-stop hit a skip_inline_frames assertion.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index bdd1ab5011a..9d0efb1d59c 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -9215,6 +9215,32 @@ remote_target::process_stop_reply (stop_reply_up stop_reply,
+     ptid = select_thread_for_ambiguous_stop_reply (*status);
+   gdb_assert (ptid != null_ptid);
+ 
++  /* In non-stop mode a stop of a thread is reported once per resume.
++     If the stub reports a plain stop of a thread we already know as
++     stopped, the reply is a duplicate.  Handing it to the core would
++     make it process a stop for a thread that has not run since the
++     last one.  Ignore it.  The initial stop replies of a connection
++     are for threads that were stopped before we were there.  Other
++     events can name a thread that GDB did not resume, e.g. an exec,
++     which is reported for the leader, so only look at plain stops.  */
++  if (target_is_non_stop_p ()
++      && !rs->starting_up
++      && status->kind () == TARGET_WAITKIND_STOPPED)
++    {
++      thread_info *thr = this->find_thread (ptid);
++
++      if (thr != nullptr
++	  && (get_remote_thread_info (thr)->get_resume_state ()
++	      == resume_state::NOT_RESUMED))
++	{
++	  remote_debug_printf ("ignoring stop reply for %s, "
++			       "which is not resumed",
++			       ptid.to_string ().c_str ());
++	  status->set_ignore ();
++	  return minus_one_ptid;
++	}
++    }
++
+   if (status->kind () != TARGET_WAITKIND_EXITED
+       && status->kind () != TARGET_WAITKIND_SIGNALLED
+       && status->kind () != TARGET_WAITKIND_NO_RESUMED)
+diff --git a/gdb/testsuite/gdb.replay/duplicate-stop.c b/gdb/testsuite/gdb.replay/duplicate-stop.c
+new file mode 100644
+index 00000000000..406da2fb3ec
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/duplicate-stop.c
+@@ -0,0 +1,32 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++volatile int counter;
++
++void
++marker (void)
++{
++  counter++;
++}
++
++int
++main (void)
++{
++  marker ();
++  marker ();
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/duplicate-stop.exp b/gdb/testsuite/gdb.replay/duplicate-stop.exp
+new file mode 100644
+index 00000000000..7c9feb9ecab
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/duplicate-stop.exp
+@@ -0,0 +1,199 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# This test confirms how GDB handles a target in non-stop mode that
++# reports a thread as stopped twice, without the thread being resumed
++# in between.  It sends the same stop reply again, right after the
++# first one.
++#
++# GDB used to process the second stop as it did the first, and
++# skip_inline_frames then gave up with an internal error, as the
++# thread still had the inline frame state of the first stop.
++#
++# gdbserver does not do this, so a real session is recorded, and then
++# edited.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile
++
++if { [build_executable "failed to build exec" $testfile $srcfile {debug}] } {
++    return
++}
++
++# Connect to the target and get non-stop.  PROTOCOL and PORT say how
++# to connect.
++proc_with_prefix connect_non_stop { protocol port } {
++    gdb_test_no_output "maint set target-non-stop on"
++    gdb_test_no_output "set non-stop on"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	return false
++    }
++    return true
++}
++
++# Run to the breakpoint at marker and show the threads.
++proc run_to_marker { } {
++    gdb_breakpoint marker
++
++    gdb_test_multiple "continue" "continue to marker" {
++	-re "Breakpoint $::decimal, marker \\(\\).*$::gdb_prompt $" {
++	    pass $gdb_test_name
++	}
++	-re "$::gdb_prompt $" {
++	    exp_continue
++	}
++    }
++
++    gdb_test "info threads" "marker \\(\\).*" "info threads"
++}
++
++# Start the inferior and record a remote log, in LOG_FILENAME, of GDB
++# running to marker.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![connect_non_stop $protocol $port]} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    run_to_marker
++}
++
++# Return the remote protocol form of PAYLOAD, with its checksum.
++proc packet { payload } {
++    set sum 0
++    foreach c [split $payload ""] {
++	incr sum [scan $c %c]
++    }
++    return [format "\$%s#%02x" $payload [expr {$sum & 0xff}]]
++}
++
++# Copy the remote log from IN_FILENAME to OUT_FILENAME, changing what
++# happens after GDB resumed the thread to run to marker: the stub then
++# reports the stop twice.  Return true if the log could be changed.
++proc update_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    # The last vCont resumes the thread.  The stop is a notification,
++    # and GDB asks for the next one with vStopped.
++    set cont -1
++    for { set i 0 } { $i < [llength $lines] } { incr i } {
++	if { [regexp {^w \$vCont;c#} [lindex $lines $i]] } {
++	    set cont $i
++	}
++    }
++    if { $cont == -1 } {
++	return false
++    }
++
++    set notif -1
++    for { set i $cont } { $i < [llength $lines] } { incr i } {
++	if { [regexp {%Stop:([^#]*)#} [lindex $lines $i] match payload] } {
++	    set notif $i
++	    break
++	}
++    }
++    if { $notif == -1 } {
++	return false
++    }
++
++    # The next line is GDB's first vStopped and the one after it is the
++    # stub's reply to it, which is OK, as there is no other stop.
++    set stopped [expr {$notif + 1}]
++    set stopped_reply [expr {$notif + 2}]
++    if { [lindex $lines $stopped] != "w \$vStopped#55"
++	 || ![regexp {^r \$OK#9a} [lindex $lines $stopped_reply]] } {
++	return false
++    }
++
++    # Instead, the stub sends the same stop again.  GDB asks once more
++    # and gets OK.
++    set lines [lreplace $lines $stopped_reply $stopped_reply \
++		   "r [packet $payload]" \
++		   "w \$vStopped#55" \
++		   "r \$OK#9a"]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++# Replay REMOTE_LOG, and check that GDB gets to marker, and goes on to
++# work with the thread.
++proc_with_prefix replay_with_log { remote_log } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot"
++
++    set res [gdbreplay_start $remote_log]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    if {![connect_non_stop $protocol $port]} {
++	fail "couldn't connect to gdbreplay"
++	return
++    }
++
++    run_to_marker
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![update_replay_log $remote_log $modified_log] } {
++    fail "couldn't update remote replay log"
++    return
++}
++
++with_test_prefix "with unmodified log" {
++    # This confirms that the session can be replayed at all.
++    replay_with_log $remote_log
++}
++
++with_test_prefix "with modified log" {
++    replay_with_log $modified_log
++}

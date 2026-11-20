@@ -14,4 +14,4 @@ resumes a program while connecting to it, and an event whose process has
 gone is moot (PR gdb/18749).
 
 Some of these are under review on gdb-patches; the rest are not sent yet.
-The testsuite changes are left out. License: GPL-3.0-or-later, as GDB.
+Code and testsuite changes are included. License: GPL-3.0-or-later, as GDB.

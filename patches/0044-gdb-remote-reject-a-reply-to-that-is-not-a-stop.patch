@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 07:14:46 +0100
+Subject: [PATCH 44/76] gdb/remote: reject a reply to '?' that is not a stop
+
+An all-stop stub answering '?' with something other than a stop made GDB spin forever at connect.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index d5581779cd8..cb6538bd5a1 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -5634,6 +5634,12 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+ 	    error (_("The target is not running (try extended-remote?)"));
+ 	  return false;
+ 	}
++      else if (rs->buf[0] != 'T' && rs->buf[0] != 'S')
++	{
++	  /* Anything else is not a stop.  Taking it for the initial stop
++	     would leave GDB waiting for a stop that never comes.  */
++	  error (_("Remote replied unexpectedly to '?': %s"), rs->buf.data ());
++	}
+       else
+ 	{
+ 	  /* Save the reply for later.  */
+diff --git a/gdb/testsuite/gdb.replay/question-reply-not-a-stop.exp b/gdb/testsuite/gdb.replay/question-reply-not-a-stop.exp
+new file mode 100644
+index 00000000000..0db78143695
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/question-reply-not-a-stop.exp
+@@ -0,0 +1,111 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test a stub that answers '?' with something that is not a stop, on
++# an all-stop target.  GDB used to take the reply for the initial stop,
++# and then waited forever, using all the CPU, for a stop that never
++# came.  It must give an error instead.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile connect.c
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Connect to gdbserver with an all-stop target and a remote log in
++# LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    gdb_test_no_output "maint set target-non-stop off"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "disconnect" ".*" "disconnect after recording"
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME up to GDB's first '?'
++# packet, and answer it with "I", which is no stop reply.  The log ends
++# there.  Return true if the packet was found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set i [lsearch -regexp $lines {^w \+?\$\?#}]
++    if { $i == -1 } {
++	return false
++    }
++
++    # gdbreplay adds the checksum.
++    set lines [lrange $lines 0 $i]
++    lappend lines "r \$I"
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![make_replay_log $remote_log $modified_log] } {
++    fail "couldn't make the replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++gdb_test_no_output "set sysroot"
++gdb_test_no_output "maint set target-non-stop off"
++
++set res [gdbreplay_start $modified_log]
++set protocol [lindex $res 0]
++set port [lindex $res 1]
++
++gdb_test "target $protocol $port" \
++    "Remote replied unexpectedly to '\\?': I" \
++    "connect, with a reply to '?' that is not a stop"
++
++gdb_test "print 1" " = 1" "gdb is alive"

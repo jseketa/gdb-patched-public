@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 09:30:03 +0100
+Subject: [PATCH 12/76] gdb/testsuite: check GDB's exit status in
+ monitor-exit-quit.exp
+
+The test passed when GDB aborted on the way out; it now checks for exit status 0.
+
+diff --git a/gdb/testsuite/gdb.server/monitor-exit-quit.exp b/gdb/testsuite/gdb.server/monitor-exit-quit.exp
+index 75c3e6e2221..86d990b3220 100644
+--- a/gdb/testsuite/gdb.server/monitor-exit-quit.exp
++++ b/gdb/testsuite/gdb.server/monitor-exit-quit.exp
+@@ -68,6 +68,15 @@ gdb_test_multiple "quit" "" {
+     }
+ }
+ 
++# GDB must exit normally, with status 0, not be killed by a signal
++# (an abort while it tears down the lost connection, for instance).
++if { $do_cleanup && ![is_remote host] } {
++    set result [wait -i $gdb_spawn_id]
++    verbose -log "wait: $result"
++    gdb_assert { [llength $result] == 4 && [lindex $result 2] == 0 \
++		     && [lindex $result 3] == 0 } "exit status"
++}
++
+ # Cleanup, as in default_gdb_exit.
+ if { $do_cleanup } {
+     gdb_exit_cleanup

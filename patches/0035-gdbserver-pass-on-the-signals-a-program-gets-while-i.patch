@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 20:20:20 +0100
+Subject: [PATCH 35/76] gdbserver: pass on the signals a program gets while it
+ starts up
+
+Startup hung when the shell waited for a signal gdbserver dropped (zsh command substitution, fish).
+
+diff --git a/gdb/testsuite/gdb.server/startup-shell-signal-shell.c b/gdb/testsuite/gdb.server/startup-shell-signal-shell.c
+new file mode 100644
+index 00000000000..74c314ffef1
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/startup-shell-signal-shell.c
+@@ -0,0 +1,64 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++/* A stand-in for $SHELL that gets a signal before it runs the
++   program, as a real shell can (for example SIGCHLD from a command in
++   its startup files).  It is run as SHELL -c "exec PROGRAM ARGS".  */
++
++#include <signal.h>
++#include <string.h>
++#include <unistd.h>
++
++static volatile sig_atomic_t got_signal;
++
++static void
++handler (int sig)
++{
++  got_signal = 1;
++}
++
++int
++main (int argc, char **argv)
++{
++  char *prog, *end;
++
++  signal (SIGUSR1, handler);
++  raise (SIGUSR1);
++
++  /* The signal did not reach us.  */
++  if (!got_signal)
++    return 3;
++
++  if (argc != 3 || strcmp (argv[1], "-c") != 0
++      || strncmp (argv[2], "exec ", 5) != 0)
++    return 4;
++
++  /* The program, maybe quoted, without arguments.  */
++  prog = argv[2] + 5;
++  if (*prog == '\'')
++    {
++      prog++;
++      end = strchr (prog, '\'');
++    }
++  else
++    end = strchr (prog, ' ');
++  if (end != NULL)
++    *end = '\0';
++
++  execl (prog, prog, (char *) NULL);
++  return 5;
++}
+diff --git a/gdb/testsuite/gdb.server/startup-shell-signal.c b/gdb/testsuite/gdb.server/startup-shell-signal.c
+new file mode 100644
+index 00000000000..6a0e311ef41
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/startup-shell-signal.c
+@@ -0,0 +1,22 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++int
++main (void)
++{
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.server/startup-shell-signal.exp b/gdb/testsuite/gdb.server/startup-shell-signal.exp
+new file mode 100644
+index 00000000000..d4b06b8f2ba
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/startup-shell-signal.exp
+@@ -0,0 +1,71 @@
++# This testcase is part of GDB, the GNU debugger.
++
++# Copyright 2026 Free Software Foundation, Inc.
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test that a signal the shell gets while gdbserver starts the program
++# through it reaches the shell, instead of being dropped.  The shell is
++# a stand-in that exits with code 3 if its signal handler did not run.
++
++load_lib gdbserver-support.exp
++
++standard_testfile .c -shell.c
++
++require allow_gdbserver_tests
++require {!is_remote target}
++
++if {[build_executable "failed to prepare" $testfile $srcfile debug] == -1} {
++    return
++}
++
++set shell_file [standard_output_file ${testfile}-shell]
++if {[build_executable "failed to prepare the shell" ${testfile}-shell \
++	 $srcfile2 debug] == -1} {
++    return
++}
++
++set gdbserver [find_gdbserver]
++if { $gdbserver == "" } {
++    fail "could not find gdbserver"
++    return
++}
++
++set msg "program started through the shell"
++save_vars { env(SHELL) } {
++    set env(SHELL) $shell_file
++
++    # gdbserver starts the program before it waits for GDB on stdio.
++    set spawn_id [remote_spawn target "$gdbserver stdio $binfile"]
++
++    expect {
++	-re "Process [string_to_regexp $binfile] created; pid = $decimal" {
++	    pass $msg
++	}
++	-re "During startup program exited with code 3\\." {
++	    fail "$msg (the shell's signal was lost)"
++	}
++	-re "During startup program exited with code $decimal\\." {
++	    fail $msg
++	}
++	eof {
++	    fail "$msg (eof)"
++	}
++	timeout {
++	    fail "$msg (timeout)"
++	}
++    }
++
++    remote_close target
++}
+diff --git a/gdbserver/target.cc b/gdbserver/target.cc
+index 43ef421df74..7d5110f01e7 100644
+--- a/gdbserver/target.cc
++++ b/gdbserver/target.cc
+@@ -206,6 +206,25 @@ target_mourn_inferior (ptid_t ptid)
+   the_target->mourn (find_process_pid (ptid.pid ()));
+ }
+ 
++/* startup_inferior resumes a process that is starting up after each
++   event it waits for, with the signal it stopped with.  No client sees
++   those stops, so nothing tags the threads as wanting to be stopped,
++   as is done when a stop is reported.  The resume below would then be
++   taken as one for threads already resumed and be ignored, and the
++   signal lost.  Tag them here.  */
++
++static void
++tag_starting_up_threads_stopped (ptid_t ptid)
++{
++  process_info *proc = find_process_pid (ptid.pid ());
++
++  if (proc == nullptr || !proc->starting_up)
++    return;
++
++  for (thread_info &thread : proc->thread_list ())
++    thread.last_resume_kind = resume_stop;
++}
++
+ /* See target/target.h.  */
+ 
+ void
+@@ -213,6 +232,8 @@ target_continue_no_signal (ptid_t ptid)
+ {
+   struct thread_resume resume_info;
+ 
++  tag_starting_up_threads_stopped (ptid);
++
+   resume_info.thread = ptid;
+   resume_info.kind = resume_continue;
+   resume_info.sig = GDB_SIGNAL_0;
+@@ -226,6 +247,8 @@ target_continue (ptid_t ptid, enum gdb_signal signal)
+ {
+   struct thread_resume resume_info;
+ 
++  tag_starting_up_threads_stopped (ptid);
++
+   resume_info.thread = ptid;
+   resume_info.kind = resume_continue;
+   resume_info.sig = gdb_signal_to_host (signal);

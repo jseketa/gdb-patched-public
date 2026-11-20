@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 15:44:19 +0100
+Subject: [PATCH 48/76] gdb/linux-nat: don't resume threads to list markers
+ without the agent
+
+"info static-tracepoint-markers" let a stopped native program run.
+
+diff --git a/gdb/linux-nat.c b/gdb/linux-nat.c
+index 69aa73d2bd4..aabba3763cd 100644
+--- a/gdb/linux-nat.c
++++ b/gdb/linux-nat.c
+@@ -4351,6 +4351,12 @@ linux_nat_target::static_tracepoint_markers_by_strid (const char *strid)
+   ptid_t ptid = ptid_t (pid, 0);
+   static_tracepoint_marker marker;
+ 
++  /* Without the in-process agent there is nobody to ask.  Do not stop
++     and resume the threads for nothing: resuming them would let a
++     program run that the user had stopped.  */
++  if (!agent_loaded_p ())
++    return markers;
++
+   /* Pause all */
+   target_stop (ptid);
+ 
+diff --git a/gdb/testsuite/gdb.base/static-markers-no-agent.c b/gdb/testsuite/gdb.base/static-markers-no-agent.c
+new file mode 100644
+index 00000000000..6a0e311ef41
+--- /dev/null
++++ b/gdb/testsuite/gdb.base/static-markers-no-agent.c
+@@ -0,0 +1,22 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++int
++main (void)
++{
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.base/static-markers-no-agent.exp b/gdb/testsuite/gdb.base/static-markers-no-agent.exp
+new file mode 100644
+index 00000000000..d63f3b63fd0
+--- /dev/null
++++ b/gdb/testsuite/gdb.base/static-markers-no-agent.exp
+@@ -0,0 +1,42 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# "info static-tracepoint-markers" on a native GNU/Linux program that
++# does not load the in-process agent.  GDB stopped and then resumed all
++# threads around asking the agent, so the command let the stopped
++# program run.  It must leave the program stopped.
++
++require {istarget "*-*-linux*"}
++require !gdb_protocol_is_remote
++
++standard_testfile
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++if { ![runto_main] } {
++    return
++}
++
++# Only the table header: there is no agent to list markers.
++gdb_test "info static-tracepoint-markers" \
++    "Cnt +ID +Enb +Address +What" \
++    "no markers without the agent"
++
++# The thread must still be stopped where it was.
++gdb_test "info threads" "\\* 1 +\[^\r\n\]* main \\(\\) at \[^\r\n\]*" \
++    "thread is still stopped"
++gdb_test "print \$pc" " = .* <main\\+\[0-9\]+>" "pc can be read"

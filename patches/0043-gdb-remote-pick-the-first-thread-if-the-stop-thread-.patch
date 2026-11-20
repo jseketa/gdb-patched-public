@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 22:24:34 +0100
+Subject: [PATCH 43/76] gdb/remote: pick the first thread if the stop thread is
+ not listed
+
+A stop reply naming a thread missing from the list asserted in switch_to_thread at connect.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index f2afef27a1b..d5581779cd8 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -5662,15 +5662,26 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+ 	     multi-threaded program, this will ideally be the thread
+ 	     that last reported an event before GDB disconnected.  */
+ 	  ptid_t curr_thread = get_current_thread (wait_status);
+-	  if (curr_thread == null_ptid)
++	  thread_info *curr_tp = nullptr;
++	  if (curr_thread != null_ptid)
++	    curr_tp = this->find_thread (curr_thread);
++
++	  if (curr_tp == nullptr)
+ 	    {
+ 	      /* Odd... The target was able to list threads, but not
+ 		 tell us which thread was current (no "thread"
+-		 register in T stop reply?).  Just pick the first
+-		 thread in the thread list then.  */
++		 register in T stop reply?), or named a thread that
++		 is not in the list.  Just pick the first thread in
++		 the thread list then.  */
+ 
+-	      remote_debug_printf ("warning: couldn't determine remote "
+-				   "current thread; picking first in list.");
++	      if (curr_thread == null_ptid)
++		remote_debug_printf ("warning: couldn't determine remote "
++				     "current thread; picking first in list.");
++	      else
++		remote_debug_printf ("warning: remote current thread %s is "
++				     "not in the thread list; picking first "
++				     "in list.",
++				     curr_thread.to_string ().c_str ());
+ 
+ 	      for (thread_info &tp : all_non_exited_threads (this,
+ 							     minus_one_ptid))
+@@ -5680,7 +5691,7 @@ remote_target::start_remote_1 (int from_tty, int extended_p)
+ 		}
+ 	    }
+ 	  else
+-	    switch_to_thread (this->find_thread (curr_thread));
++	    switch_to_thread (curr_tp);
+ 
+ 	  get_remote_thread_info (inferior_thread ())->set_resumed ();
+ 	}
+diff --git a/gdb/testsuite/gdb.replay/unlisted-stop-thread.exp b/gdb/testsuite/gdb.replay/unlisted-stop-thread.exp
+new file mode 100644
+index 00000000000..db0d74b465a
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/unlisted-stop-thread.exp
+@@ -0,0 +1,130 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test a stub whose stop reply at connect names a thread that is not in
++# its thread list.  GDB then picks the first thread in the list, as it
++# does when the stop reply names no thread.  It used to switch to the
++# thread it could not find, and fail an assertion in switch_to_thread.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile connect.c
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Connect to gdbserver with a remote log in LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    # The thread is selected this way only on an all-stop target; a
++    # target in non-stop mode takes another path.
++    gdb_test_no_output "maint set target-non-stop off"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "disconnect" ".*" "disconnect after recording"
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME, changing the thread in
++# the reply to GDB's first '?' packet to one that the thread list does
++# not have.  Return true if the reply was found and changed.
++proc update_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set i [lsearch -regexp $lines {^w \+?\$\?#}]
++    if { $i == -1 } {
++	return false
++    }
++    set reply [lindex $lines [expr {$i + 1}]]
++    if { ![regexp {thread:p([0-9a-f]+)\.([0-9a-f]+);} $reply \
++	       match pid tid] } {
++	return false
++    }
++
++    # A thread id that the single-threaded program does not have.
++    set other [format %x [expr {[scan $tid %x] + 0x1000}]]
++    regsub {thread:p[0-9a-f]+\.[0-9a-f]+;} $reply \
++	"thread:p$pid.$other;" reply
++
++    # gdbreplay recomputes the checksum.
++    set lines [lreplace $lines [expr {$i + 1}] [expr {$i + 1}] $reply]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![update_replay_log $remote_log $modified_log] } {
++    fail "couldn't update remote replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++gdb_test_no_output "set sysroot"
++
++gdb_test_no_output "maint set target-non-stop off"
++
++set res [gdbreplay_start $modified_log]
++set protocol [lindex $res 0]
++set port [lindex $res 1]
++
++# What GDB does after connecting depends on the thread it then learns
++# about, and the replayed session may not have the packets for that.
++# The point is that it connects without an internal error.
++gdb_test_multiple "target $protocol $port" "connect" {
++    -re "internal-error: \[^\r\n\]*\r\n" {
++	fail $gdb_test_name
++    }
++    -re "$gdb_prompt $" {
++	pass $gdb_test_name
++    }
++}
++
++gdb_test "print 1" " = 1" "gdb is alive"

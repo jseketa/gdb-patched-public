@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 21:40:39 +0100
+Subject: [PATCH 42/76] gdb/remote: leave "timeout" in the buffer when getpkt
+ gives up
+
+A packet that broke off left unterminated bytes that remote_query_supported parsed past the buffer.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 456e8cc6140..f2afef27a1b 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -11218,8 +11218,13 @@ remote_target::getpkt (gdb::char_vector *buf, bool forever, bool *is_notif)
+ 	  if (c == SERIAL_TIMEOUT)
+ 	    {
+ 	      if (is_notif != nullptr)
+-		return -1; /* Don't complain, it's normal to not get
+-			      anything in this case.  */
++		{
++		  /* Don't complain, it's normal to not get anything in
++		     this case.  An earlier try may have left part of a
++		     packet in BUF.  */
++		  strcpy (buf->data (), "timeout");
++		  return -1;
++		}
+ 
+ 	      if (forever)	/* Watchdog went off?  Kill the target.  */
+ 		{
+@@ -11252,6 +11257,11 @@ remote_target::getpkt (gdb::char_vector *buf, bool forever, bool *is_notif)
+ 	  /* Skip the ack char if we're in no-ack mode.  */
+ 	  if (!rs->noack_mode)
+ 	    remote_serial_write ("+", 1);
++
++	  /* read_frame may have left part of a packet in BUF, with no
++	     terminating null.  Callers that do not check the result
++	     parse BUF, so give them "timeout", as at the start.  */
++	  strcpy (buf->data (), "timeout");
+ 	  return -1;
+ 	}
+ 
+diff --git a/gdb/testsuite/gdb.replay/qsupported-broken-reply.exp b/gdb/testsuite/gdb.replay/qsupported-broken-reply.exp
+new file mode 100644
+index 00000000000..dd21931259d
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/qsupported-broken-reply.exp
+@@ -0,0 +1,125 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test how GDB handles a qSupported reply that it cannot receive.  The
++# stub starts a reply, starts another packet in the middle of it, and
++# then sends nothing that GDB can use.  GDB gives up after its retries,
++# and must then see the reply as "timeout", not as the bytes it got
++# before it gave up.  Those bytes have no terminating null, and GDB used
++# to parse them, reading past the end of its packet buffer.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile connect.c
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Connect to gdbserver with a remote log in LOG_FILENAME, so that the
++# log has the qSupported packet this GDB sends.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "disconnect" ".*" "disconnect after recording"
++}
++
++# Write to OUT_FILENAME a log that has GDB's first packet from the log
++# in IN_FILENAME, the broken reply, and GDB's three NAKs and its final
++# ACK.  The log ends there, so gdbreplay closes the connection once GDB
++# has given up.  Return true if the first packet was found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set i [lsearch -regexp $lines {^w \+?\$qSupported:}]
++    if { $i == -1 } {
++	return false
++    }
++    set first [lindex $lines $i]
++
++    # gdbreplay adds the checksum at the end.  The second '$' makes
++    # GDB drop the first packet, and the rest of the line has no '$'
++    # for GDB to start again from.
++    set fd [open $out_filename "w"]
++    puts $fd $first
++    puts $fd "r +\$[string repeat A 16]\$BBBB"
++    puts $fd "w ---+"
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set broken_log [standard_output_file replay-broken.log]
++
++record_initial_logfile $remote_log
++
++if { ![make_replay_log $remote_log $broken_log] } {
++    fail "couldn't make the replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++gdb_test_no_output "set sysroot"
++
++# Keep the retries short.
++gdb_test_no_output "set remotetimeout 1"
++
++set res [gdbreplay_start $broken_log]
++set protocol [lindex $res 0]
++set port [lindex $res 1]
++
++set saw_timeout false
++gdb_test_multiple "target $protocol $port" "connect" {
++    -re "unrecognized item \"timeout\" in \"qSupported\" response" {
++	set saw_timeout true
++	exp_continue
++    }
++    -re "unrecognized item \"A+\[^\r\n\]*\" in \"qSupported\" response" {
++	fail "$gdb_test_name (parsed the bytes before the retries)"
++    }
++    -re "$gdb_prompt $" {
++	gdb_assert { $saw_timeout } $gdb_test_name
++    }
++}
++
++# GDB is still there.
++gdb_test "print 1" " = 1" "gdb is alive"

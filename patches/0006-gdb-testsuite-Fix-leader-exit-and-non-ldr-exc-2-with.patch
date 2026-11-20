@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 04:50:42 +0100
+Subject: [PATCH 06/76] [gdb/testsuite] Fix leader-exit and non-ldr-exc-2 with
+ gdbserver
+
+gdbserver reports a thread exit only when asked, so the tests waited for a "Thread exited" message that never came.
+
+diff --git a/gdb/testsuite/gdb.threads/leader-exit.exp b/gdb/testsuite/gdb.threads/leader-exit.exp
+index fb2f6980c2a..80baffe3465 100644
+--- a/gdb/testsuite/gdb.threads/leader-exit.exp
++++ b/gdb/testsuite/gdb.threads/leader-exit.exp
+@@ -30,14 +30,27 @@ if {![runto_main]} {
+     return
+ }
+ 
+-# Wait for the "Thread exited" message.
++# Wait for the "Thread exited" message.  gdbserver only reports a
++# thread exit if GDB asks for that, which it does not do here, so
++# there GDB sees the exit when the target stops.  Then give the
++# leader some time to exit, and interrupt the target.
+ set re_thread_exited {\[Thread [^\r\n]+ exited\]}
+ set saw_thread_exited 0
++set interrupt_first [target_is_gdbserver]
+ gdb_test_multiple "continue" "continue to thread exited" {
++    -re "Continuing\\.\r\n" {
++	if { $interrupt_first } {
++	    after 1000
++	    send_gdb "\003"
++	}
++	exp_continue
++    }
+     -re $re_thread_exited {
+ 	set saw_thread_exited 1
+-	# Get a prompt.
+-	send_gdb "\003"
++	if { !$interrupt_first } {
++	    # Get a prompt.
++	    send_gdb "\003"
++	}
+ 	exp_continue
+     }
+     -re -wrap "" {
+diff --git a/gdb/testsuite/gdb.threads/non-ldr-exc-2.exp b/gdb/testsuite/gdb.threads/non-ldr-exc-2.exp
+index 3f465e10159..0132a310408 100644
+--- a/gdb/testsuite/gdb.threads/non-ldr-exc-2.exp
++++ b/gdb/testsuite/gdb.threads/non-ldr-exc-2.exp
+@@ -39,14 +39,27 @@ proc do_test { lock_sched nonstop } {
+ 	return -1
+     }
+ 
+-    # Wait for the "Thread exited" message.
++    # Wait for the "Thread exited" message.  gdbserver only reports a
++    # thread exit if GDB asks for that, which it does not do here, so
++    # there GDB sees the exit when the target stops.  Then give the
++    # leader some time to exit, and interrupt the target.
+     set re_thread_exited {\[Thread [^\r\n]+ exited\]}
+     set saw_thread_exited 0
++    set interrupt_first [target_is_gdbserver]
+     gdb_test_multiple "continue" "continue to thread exited" {
++	-re "Continuing\\.\r\n" {
++	    if { $interrupt_first } {
++		after 1000
++		send_gdb "\003"
++	    }
++	    exp_continue
++	}
+ 	-re $re_thread_exited {
+ 	    set saw_thread_exited 1
+-	    # Get a prompt.
+-	    send_gdb "\003"
++	    if { !$interrupt_first } {
++		# Get a prompt.
++		send_gdb "\003"
++	    }
+ 	    exp_continue
+ 	}
+ 	-re -wrap "" {

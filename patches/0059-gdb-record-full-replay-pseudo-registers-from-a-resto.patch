@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 23:33:02 +0100
+Subject: [PATCH 59/76] gdb/record-full: replay pseudo registers from a
+ restored record too
+
+Replaying a restored record with a ymm register entry said "Selected thread is running"; record_full_is_replaying missed the record-core target.
+
+diff --git a/gdb/record-full.c b/gdb/record-full.c
+index ea96dd11a64..a6cece9ce4f 100644
+--- a/gdb/record-full.c
++++ b/gdb/record-full.c
+@@ -665,7 +665,7 @@ record_full_is_used (void)
+ bool
+ record_full_is_replaying ()
+ {
+-  auto target = dynamic_cast<record_full_target *>
++  auto target = dynamic_cast<record_full_base_target *>
+ 		  (current_inferior ()->target_at (record_stratum));
+   return target != nullptr && RECORD_FULL_IS_REPLAY;
+ }
+diff --git a/gdb/testsuite/gdb.reverse/avx-precsave.c b/gdb/testsuite/gdb.reverse/avx-precsave.c
+new file mode 100644
+index 00000000000..e473469c41b
+--- /dev/null
++++ b/gdb/testsuite/gdb.reverse/avx-precsave.c
+@@ -0,0 +1,26 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++char buf[32] = "0123456789abcdef0123456789abcdef";
++
++int
++main ()
++{
++  asm volatile ("vpxor %ymm0, %ymm0, %ymm0");	/* begin record */
++  asm volatile ("vmovdqu %0, %%ymm0" : : "m" (buf));
++  return 0;					/* end record */
++}
+diff --git a/gdb/testsuite/gdb.reverse/avx-precsave.exp b/gdb/testsuite/gdb.reverse/avx-precsave.exp
+new file mode 100644
+index 00000000000..ca278f03b22
+--- /dev/null
++++ b/gdb/testsuite/gdb.reverse/avx-precsave.exp
+@@ -0,0 +1,60 @@
++# Copyright 2026 Free Software Foundation, Inc.
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Record an AVX instruction, which logs a ymm register (a pseudo
++# register), save the record, restore it and replay it.  Replaying
++# the restored record reads the pseudo register, which must work
++# while the record-core target replays.
++
++require supports_reverse
++require have_avx
++
++if {![istarget "x86_64-*-*"]} {
++    untested "needs x86_64"
++    return
++}
++
++standard_testfile
++
++if {[prepare_for_testing "failed to prepare" $testfile $srcfile]} {
++    return
++}
++
++if {![runto_main]} {
++    return
++}
++
++set precsave [standard_output_file $testfile.precsave]
++
++gdb_test_no_output "record" "turn on process record"
++
++set end_line [gdb_get_line_number "end record"]
++gdb_test "until $end_line" "end record.*" "record the AVX instructions"
++
++gdb_test "record save $precsave" \
++    "Saved core file $precsave with execution log\\." \
++    "save the record"
++
++gdb_test "kill" "" "kill the program" \
++    "Kill the program being debugged\\? \\(y or n\\) " "y"
++
++gdb_test "record full restore $precsave" \
++    "Restored records from core file .*" \
++    "restore the record"
++
++gdb_test "until $end_line" "end record.*" "replay the AVX instructions"
++
++gdb_test "print \$ymm0.v32_int8\[31\]" " = 102" \
++    "ymm0 after replaying"

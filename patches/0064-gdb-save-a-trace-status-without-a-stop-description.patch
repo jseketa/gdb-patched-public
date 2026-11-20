@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 23:30:36 +0100
+Subject: [PATCH 64/76] gdb: save a trace status without a stop description
+
+tsave passed a null stop description to strlen.
+
+diff --git a/gdb/testsuite/gdb.replay/tstatus-malformed.exp b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+index 5797dee9d31..197e656ef8a 100644
+--- a/gdb/testsuite/gdb.replay/tstatus-malformed.exp
++++ b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+@@ -163,3 +163,20 @@ with_test_prefix "terror without description" {
+ 	    "the status has the tracepoint and no description"
+     }
+ }
++
++# A trace stopped by "tstop", in the older form with no description.
++# GDB keeps no description then, and "tsave" used to write it with
++# strlen of a null pointer.
++with_test_prefix "tstop without description" {
++    if { [replay_with_reply $remote_log "T0;tstop:0" ".*"] } {
++	set tfile [standard_output_file saved-tstop.tf]
++
++	file delete $tfile
++	gdb_test "tsave $tfile" ".*" "tsave"
++
++	set contents [saved_trace_file $tfile]
++
++	gdb_assert { [regexp {(^|\n)status 0;tstop::0(;|\n)} $contents] } \
++	    "the status has the stop and no description"
++    }
++}
+diff --git a/gdb/tracefile-tfile.c b/gdb/tracefile-tfile.c
+index 1a74b81e436..c7c336f466a 100644
+--- a/gdb/tracefile-tfile.c
++++ b/gdb/tracefile-tfile.c
+@@ -174,9 +174,11 @@ tfile_write_status (struct trace_file_writer *self,
+   if (ts->stop_reason == tracepoint_error
+       || ts->stop_reason == trace_stop_command)
+     {
+-      char *buf = (char *) alloca (strlen (ts->stop_desc) * 2 + 1);
++      /* A trace stopped by "tstop" may have no description.  */
++      const char *desc = ts->stop_desc != nullptr ? ts->stop_desc : "";
++      char *buf = (char *) alloca (strlen (desc) * 2 + 1);
+ 
+-      bin2hex ((gdb_byte *) ts->stop_desc, buf, strlen (ts->stop_desc));
++      bin2hex ((const gdb_byte *) desc, buf, strlen (desc));
+       fprintf (writer->fp, ":%s", buf);
+     }
+   fprintf (writer->fp, ":%x", ts->stopping_tracepoint);

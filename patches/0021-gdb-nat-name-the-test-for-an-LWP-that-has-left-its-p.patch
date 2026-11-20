@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 17:31:53 +0100
+Subject: [PATCH 21/76] gdb/nat: name the test for an LWP that has left its
+ ptrace-stop
+
+The same /proc test in linux-nat and gdbserver moves to linux_proc_lwp_left_trace_stop; no change in behavior.
+
+diff --git a/gdb/linux-nat.c b/gdb/linux-nat.c
+index 8840dbe3f75..2adfbe46720 100644
+--- a/gdb/linux-nat.c
++++ b/gdb/linux-nat.c
+@@ -1635,16 +1635,7 @@ check_ptrace_stopped_lwp_gone (struct lwp_info *lp)
+      confuse !T state for the LWP being gone.  */
+   gdb_assert (lp->stopped);
+ 
+-  /* We can't just check whether the LWP is in 'Z (Zombie)' state,
+-     because even if ptrace failed with ESRCH, the tracee may be "not
+-     yet fully dead", but already refusing ptrace requests.  In that
+-     case the tracee has 'R (Running)' state for a little bit
+-     (observed in Linux 3.18).  See also the note on ESRCH in the
+-     ptrace(2) man page.  Instead, check whether the LWP has any state
+-     other than ptrace-stopped.  */
+-
+-  /* Don't assume anything if /proc/PID/status can't be read.  */
+-  if (linux_proc_pid_is_trace_stopped_nowarn (lp->ptid.lwp ()) == 0)
++  if (linux_proc_lwp_left_trace_stop (lp->ptid.lwp ()))
+     {
+       lp->stop_reason = TARGET_STOPPED_BY_NO_REASON;
+       lp->status = 0;
+diff --git a/gdb/nat/linux-procfs.c b/gdb/nat/linux-procfs.c
+index 6281581aeea..f75898d5baa 100644
+--- a/gdb/nat/linux-procfs.c
++++ b/gdb/nat/linux-procfs.c
+@@ -205,6 +205,22 @@ linux_proc_pid_is_trace_stopped_nowarn (pid_t pid)
+   return linux_proc_pid_has_state (pid, PROC_STATE_TRACING_STOP, 1);
+ }
+ 
++/* See linux-procfs.h.  */
++
++bool
++linux_proc_lwp_left_trace_stop (pid_t lwp)
++{
++  /* We can't just check whether the LWP is in 'Z (Zombie)' state,
++     because even if ptrace failed with ESRCH, the tracee may be "not
++     yet fully dead", but already refusing ptrace requests.  In that
++     case the tracee has 'R (Running)' state for a little bit
++     (observed in Linux 3.18).  See also the note on ESRCH in the
++     ptrace(2) man page.  Instead, check whether the LWP has any state
++     other than ptrace-stopped.  Don't assume anything if
++     /proc/LWP/status can't be read.  */
++  return linux_proc_pid_is_trace_stopped_nowarn (lwp) == 0;
++}
++
+ /* Return non-zero if PID is a zombie.  If WARN, warn on failure to
+    open the /proc file.  */
+ 
+diff --git a/gdb/nat/linux-procfs.h b/gdb/nat/linux-procfs.h
+index 70d50eb7271..c0033769caf 100644
+--- a/gdb/nat/linux-procfs.h
++++ b/gdb/nat/linux-procfs.h
+@@ -38,6 +38,14 @@ extern int linux_proc_pid_is_stopped (pid_t pid);
+ 
+ extern int linux_proc_pid_is_trace_stopped_nowarn (pid_t pid);
+ 
++/* Whether LWP, which the tracer has stopped, has left its
++   ptrace-stop: it is a zombie or about to become one (e.g. another
++   thread of its process called exit_group), every ptrace request on
++   it fails, and its exit status comes soon.  False if
++   /proc/LWP/status cannot be read.  */
++
++extern bool linux_proc_lwp_left_trace_stop (pid_t lwp);
++
+ /* Return non-zero if PID is a zombie.  Failure to open the
+    /proc/pid/status file results in a warning.  */
+ 
+diff --git a/gdbserver/linux-low.cc b/gdbserver/linux-low.cc
+index 0feba5c31cf..e998f3a0a8f 100644
+--- a/gdbserver/linux-low.cc
++++ b/gdbserver/linux-low.cc
+@@ -4303,16 +4303,7 @@ check_ptrace_stopped_lwp_gone (struct lwp_info *lp)
+      confuse !T state for the LWP being gone.  */
+   gdb_assert (lp->stopped);
+ 
+-  /* We can't just check whether the LWP is in 'Z (Zombie)' state,
+-     because even if ptrace failed with ESRCH, the tracee may be "not
+-     yet fully dead", but already refusing ptrace requests.  In that
+-     case the tracee has 'R (Running)' state for a little bit
+-     (observed in Linux 3.18).  See also the note on ESRCH in the
+-     ptrace(2) man page.  Instead, check whether the LWP has any state
+-     other than ptrace-stopped.  */
+-
+-  /* Don't assume anything if /proc/PID/status can't be read.  */
+-  if (linux_proc_pid_is_trace_stopped_nowarn (thread->id.lwp ()) == 0)
++  if (linux_proc_lwp_left_trace_stop (thread->id.lwp ()))
+     {
+       lp->stop_reason = TARGET_STOPPED_BY_NO_REASON;
+       lp->status_pending_p = 0;

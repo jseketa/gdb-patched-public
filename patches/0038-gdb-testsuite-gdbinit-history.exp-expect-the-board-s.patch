@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sun, 8 Nov 2026 00:01:16 +0100
+Subject: [PATCH 38/76] gdb/testsuite: gdbinit-history.exp: expect the board's
+ target command
+
+With native-extended-gdbserver the board's "target extended-remote" is in the history too.
+
+diff --git a/gdb/testsuite/gdb.base/gdbinit-history.exp b/gdb/testsuite/gdb.base/gdbinit-history.exp
+index 9f3280ade65..eb15c1cc18d 100644
+--- a/gdb/testsuite/gdb.base/gdbinit-history.exp
++++ b/gdb/testsuite/gdb.base/gdbinit-history.exp
+@@ -123,8 +123,17 @@ proc test_no_truncation_of_unlimited_history_file { } {
+ }
+ 
+ # Check that the current command history matches HIST, which is a list
+-# of commands, oldest fist.
+-proc check_history { hist } {
++# of commands, oldest fist.  With the extended-remote protocol the
++# board's gdb_start connects to gdbserver by typing "target
++# extended-remote ..." into the new gdb, so that command is part of its
++# history, after the ones gdb_start sends before it.  CONNECTED is false
++# for a gdb started with gdb_spawn_with_cmdline_opts, which does not
++# connect.
++proc check_history { hist {connected 1} } {
++
++    if { $connected && [target_info gdb_protocol] == "extended-remote" } {
++	lappend hist "target extended-remote \\S+"
++    }
+ 
+     # The show commands we issue here always appears last in the
+     # commands list.
+@@ -268,7 +277,7 @@ proc test_empty_history_filename { } {
+ 		    pass "$test"
+ 		}
+ 	    }
+-	    check_history [list]
++	    check_history [list] 0
+ 	    check_history_filename ""
+ 	}
+     }

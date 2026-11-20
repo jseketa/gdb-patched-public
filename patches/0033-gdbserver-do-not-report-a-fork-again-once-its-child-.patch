@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 17:10:34 +0100
+Subject: [PATCH 33/76] gdbserver: do not report a fork again once its child is
+ gone
+
+After a reconnect, '?' reported a fork whose child had been killed.
+
+diff --git a/gdb/testsuite/gdb.server/extended-remote-restart.exp b/gdb/testsuite/gdb.server/extended-remote-restart.exp
+index a592dba79ed..e80174b2575 100644
+--- a/gdb/testsuite/gdb.server/extended-remote-restart.exp
++++ b/gdb/testsuite/gdb.server/extended-remote-restart.exp
+@@ -51,6 +51,19 @@ if {[prepare_for_testing "failed to prepare" $testfile $srcfile debug]} {
+     return
+ }
+ 
++# Return the pid of inferior NUM, as "info inferiors" shows it, or -1.
++
++proc inferior_pid { num } {
++    set pid -1
++    gdb_test_multiple "info inferiors" "pid of inferior $num" {
++	-re -wrap "\r\n\[ *\] $num\[ \t\]+process (\[0-9\]+) \[^\r\n\]*.*" {
++	    set pid $expect_out(1,string)
++	    pass $gdb_test_name
++	}
++    }
++    return $pid
++}
++
+ # Core of the test.  DO_KILL_P controls whether we kill one of the
+ # inferiors before reconnecting.  And FOLLOW_CHILD_P controls whether
+ # we follow the child or the parent at the fork.
+@@ -99,6 +112,9 @@ proc test_reload { do_kill_p follow_child_p } {
+ 	     "${child_prefix} 2${ws}${live_inf_ptn}${ws}${connection_re}${executable_re}" ] \
+ 	"Check inferiors at breakpoint"
+ 
++    set parent_pid [inferior_pid 1]
++    set child_pid [inferior_pid 2]
++
+     if { $do_kill_p } {
+ 	# (Optional) Kill one of the inferiors.
+ 	gdb_test "kill" \
+@@ -123,7 +139,45 @@ proc test_reload { do_kill_p follow_child_p } {
+ 	pass "reconnect after fork"
+     } else {
+ 	fail "reconnect after fork"
++	return
++    }
++
++    # gdb_reconnect only waits for the prompt, which also comes after
++    # the connection is lost again.  Check that the processes that
++    # should be alive are there on the connection, and that a killed
++    # one did not come back.
++    if { !$do_kill_p } {
++	set live [list $parent_pid $child_pid]
++	set dead {}
++    } elseif { $follow_child_p } {
++	set live [list $parent_pid]
++	set dead [list $child_pid]
++    } else {
++	set live [list $child_pid]
++	set dead [list $parent_pid]
++    }
++
++    set out ""
++    gdb_test_multiple "info inferiors" "info inferiors after reconnect" {
++	-re "(.*)$::gdb_prompt $" {
++	    set out $expect_out(1,string)
++	}
++    }
++
++    set ok 1
++    foreach pid $live {
++	if {![regexp "process $pid\[ \t\]+\[0-9\]+ \\(extended-remote " $out]} {
++	    verbose -log "process $pid is not on the connection"
++	    set ok 0
++	}
++    }
++    foreach pid $dead {
++	if {[regexp "process $pid\[ \t\]" $out]} {
++	    verbose -log "process $pid was killed, but is back"
++	    set ok 0
++	}
+     }
++    gdb_assert {$ok} "processes after reconnect"
+ }
+ 
+ # Run all combinations of the test.
+diff --git a/gdbserver/server.cc b/gdbserver/server.cc
+index 90307c38b50..2ed47ba45f9 100644
+--- a/gdbserver/server.cc
++++ b/gdbserver/server.cc
+@@ -3733,6 +3733,24 @@ queue_stop_reply_callback (thread_info *thread)
+     }
+ }
+ 
++/* A thread's last status can be a fork, vfork or clone event that GDB
++   has already seen, whose child has since been killed, detached or has
++   exited.  Reporting that event again, as the stop reply to a new GDB,
++   would point GDB at a child that no longer exists, so make it a plain
++   stop.  */
++
++static void
++forget_gone_child_callback (thread_info *thread)
++{
++  target_waitstatus &ws = thread->last_status;
++
++  if ((ws.kind () == TARGET_WAITKIND_FORKED
++       || ws.kind () == TARGET_WAITKIND_VFORKED
++       || ws.kind () == TARGET_WAITKIND_THREAD_CLONED)
++      && find_thread_ptid (ws.child_ptid ()) == nullptr)
++    ws.set_stopped (GDB_SIGNAL_0);
++}
++
+ /* Set this inferior threads's state as "want-stopped".  We won't
+    resume this thread until the client gives us another action for
+    it.  */
+@@ -3788,6 +3806,8 @@ handle_status (char *own_buf)
+     process->gdb_detached = 0;
+   });
+ 
++  for_each_thread (forget_gone_child_callback);
++
+   /* In non-stop mode, we must send a stop reply for each stopped
+      thread.  In all-stop mode, just send one for the first stopped
+      thread we find.  */

@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 6 Nov 2026 22:28:21 +0100
+Subject: [PATCH 29/76] gdb: discard stops of a process once it has exited
+
+Drop queued stop replies of a process when its exit arrives.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 54da3f83503..e7144f09b1c 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -8572,6 +8572,36 @@ void
+ remote_target::push_stop_reply (stop_reply_up new_event)
+ {
+   remote_state *rs = get_remote_state ();
++
++  /* Once a process has exited, none of its threads can be reported as
++     stopped any more.  discard_pending_stop_replies does this when the
++     inferior is mourned, but the exit event can sit behind the stops in
++     the queue, and in the meantime core GDB would be told about a stop
++     of a thread that is gone.  Only drop stops: other events, like a
++     fork, may still need handling.  */
++  if (int pid = new_event->ptid.pid ();
++      pid != 0
++      && (new_event->ws.kind () == TARGET_WAITKIND_EXITED
++	  || new_event->ws.kind () == TARGET_WAITKIND_SIGNALLED))
++    {
++      auto iter = std::remove_if (rs->stop_reply_queue.begin (),
++				  rs->stop_reply_queue.end (),
++				  [=] (const stop_reply_up &event)
++				  {
++				    bool stale = (event->ptid.pid () == pid
++						  && (event->ws.kind ()
++						      == TARGET_WAITKIND_STOPPED));
++				    if (stale)
++				      remote_debug_printf
++					("discarding stop of exited process: "
++					 "ptid: %s, ws: %s",
++					 event->ptid.to_string ().c_str (),
++					 event->ws.to_string ().c_str ());
++				    return stale;
++				  });
++      rs->stop_reply_queue.erase (iter, rs->stop_reply_queue.end ());
++    }
++
+   rs->stop_reply_queue.push_back (std::move (new_event));
+ 
+   if (notif_debug)

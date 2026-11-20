@@ -1,0 +1,274 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sun, 8 Nov 2026 07:59:14 +0100
+Subject: [PATCH 72/76] gdb/testsuite: test losing the remote connection during
+ attach
+
+New attach-connection-closed.exp replays an attach cut at chosen packets, all-stop and target-non-stop.
+
+diff --git a/gdb/testsuite/gdb.replay/attach-connection-closed.c b/gdb/testsuite/gdb.replay/attach-connection-closed.c
+new file mode 100644
+index 00000000000..abbf97d279f
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/attach-connection-closed.c
+@@ -0,0 +1,29 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <unistd.h>
++
++int
++main (void)
++{
++  alarm (60);
++
++  while (1)
++    sleep (1);
++
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/attach-connection-closed.exp b/gdb/testsuite/gdb.replay/attach-connection-closed.exp
+new file mode 100644
+index 00000000000..b3d7b93bdb9
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/attach-connection-closed.exp
+@@ -0,0 +1,225 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test that GDB survives the remote connection closing while it is
++# attaching to a process over extended-remote.
++#
++# GDB used to hit internal errors in these cases: an assertion in
++# inferior_thread (the connection was lost while GDB had selected a
++# ptid but no thread), and, in non-stop mode, an exception thrown by
++# the code that disables thread events when stopping all threads.
++#
++# A real "attach" session with gdbserver is recorded.  Then copies of
++# the log are made that end at a chosen packet from GDB, before the
++# stub's reply.  gdbreplay closes the connection when its log ends, so GDB
++# loses the connection at that point.  The cut points are chosen by
++# packet content.  For each, GDB must report an error and stay alive.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++require can_spawn_for_attach
++
++standard_testfile
++
++if { [build_executable "failed to build exec" $testfile $srcfile {debug}] } {
++    return
++}
++
++# Start gdbserver in extended mode, connect to it with the remote log
++# going to LOG_FILENAME, and attach to the test program.
++# TARGET_NON_STOP is "on" or "off".
++proc_with_prefix record_initial_logfile { log_filename target_non_stop } {
++    clean_restart
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "maint set target-non-stop $target_non_stop"
++
++    set res [gdbserver_start "--multi" ""]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	unsupported "couldn't connect to gdbserver"
++	return false
++    }
++
++    set test_spawn_id [spawn_wait_for_attach $::binfile]
++    set testpid [spawn_id_get_pid $test_spawn_id]
++
++    set ok false
++    gdb_test_multiple "attach $testpid" "attach to the test program" {
++	-re "Attaching to process $testpid.*$::gdb_prompt $" {
++	    pass $gdb_test_name
++	    set ok true
++	}
++    }
++
++    if { $ok } {
++	gdb_test "detach" "Detaching from program.*" "detach"
++    }
++
++    # The log is complete only once GDB closes it.
++    gdb_test "disconnect" ".*" "disconnect after recording"
++    kill_wait_spawned_process $test_spawn_id
++
++    return $ok
++}
++
++# Return the packet part of a log line, that is the text between the
++# leading '$' and the '#' of the checksum, or the empty string.
++proc log_packet { line } {
++    if { [regexp {^[wr] \+?\$([^#]*)#} $line match payload] } {
++	return $payload
++    }
++    return ""
++}
++
++# Return the pid GDB attached to in the log LINES, or the empty string.
++proc log_attach_pid { lines } {
++    foreach line $lines {
++	if { [regexp {^w \$vAttach;([0-9a-f]+)#} $line match hex] } {
++	    return [expr 0x$hex]
++	}
++    }
++    return ""
++}
++
++# Write to OUT_FILENAME the lines of the log LINES up to and including
++# the NTH packet (counting from 1) that GDB sent after
++# vAttach and whose payload matches REGEXP, without the stub's reply.
++# Return true if there was such a packet.
++proc cut_log { lines out_filename regexp nth } {
++    set attached false
++    set matches {}
++    for { set i 0 } { $i < [llength $lines] } { incr i } {
++	set line [lindex $lines $i]
++	if { ![regexp {^w } $line] } {
++	    continue
++	}
++	set payload [log_packet $line]
++	if { !$attached } {
++	    set attached [string match "vAttach;*" $payload]
++	} elseif { [regexp -- $regexp $payload] } {
++	    lappend matches $i
++	}
++    }
++
++    set last [lindex $matches [expr {$nth - 1}]]
++    if { $last eq "" } {
++	return false
++    }
++
++    set fd [open $out_filename "w"]
++    foreach l [lrange $lines 0 $last] {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++# Replay the log REMOTE_LOG, which ends early, and attach to PID.  GDB
++# must report the lost connection with an error, and then still answer
++# commands.
++proc_with_prefix replay_cut_log { remote_log pid target_non_stop } {
++    clean_restart
++
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "maint set target-non-stop $target_non_stop"
++
++    set res [gdbreplay_start $remote_log]
++    set port [lindex $res 1]
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	fail "couldn't connect to gdbreplay"
++	return
++    }
++
++    # An internal error is not matched here, and makes the test fail.
++    gdb_test_multiple "attach $pid" "attach loses the connection" {
++	-re "(Remote connection closed|The program is not being run\\.)\r\n.*$::gdb_prompt $" {
++	    pass $gdb_test_name
++	}
++	-re "internal-error.*$::gdb_prompt $" {
++	    fail $gdb_test_name
++	}
++	-re "$::gdb_prompt $" {
++	    fail $gdb_test_name
++	}
++	eof {
++	    fail "$gdb_test_name (GDB died)"
++	    return
++	}
++    }
++
++    # GDB must be alive, and have no thread to show.
++    gdb_test "info threads" "No threads\\." "info threads after attach failed"
++}
++
++# Cut points, per target-non-stop mode.  Each is a list of NAME REGEXP
++# NTH: the log ends at the NTH packet after vAttach whose payload
++# matches REGEXP, so that packet gets no reply.
++#
++# - qC, qXfer:threads: the connection is lost after GDB selected the
++#   process but before it knew its thread.
++# - QThreadEvents:0: non-stop only, the connection is lost while thread
++#   events are disabled at the end of stopping all threads.
++set cuts(off) {
++    {qC {^qC$} 1}
++}
++set cuts(on) {
++    {qXfer:threads {^qXfer:threads:read} 1}
++    {QThreadEvents:0 {^QThreadEvents:0$} 1}
++}
++
++foreach_with_prefix target_non_stop { off on } {
++    set remote_log [standard_output_file replay-$target_non_stop.log]
++
++    if { ![record_initial_logfile $remote_log $target_non_stop] } {
++	continue
++    }
++
++    set fd [open $remote_log]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set pid [log_attach_pid $lines]
++    if { $pid eq "" } {
++	fail "no vAttach in the log"
++	continue
++    }
++
++    foreach cut $cuts($target_non_stop) {
++	lassign $cut name regexp nth
++
++	set cut_log [standard_output_file replay-$target_non_stop-$name.log]
++	if { ![cut_log $lines $cut_log $regexp $nth] } {
++	    untested "no packet to cut at: $name"
++	    continue
++	}
++
++	with_test_prefix "cut at $name" {
++	    replay_cut_log $cut_log $pid $target_non_stop
++	}
++    }
++}

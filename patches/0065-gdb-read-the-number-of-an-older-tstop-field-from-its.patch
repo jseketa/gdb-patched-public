@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 00:01:09 +0100
+Subject: [PATCH 65/76] gdb: read the number of an older "tstop" field from its
+ start
+
+The older form skipped a character after the ':', reading past the end of the reply when the field was last.
+
+diff --git a/gdb/testsuite/gdb.replay/tstatus-malformed.exp b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+index 197e656ef8a..4b849174258 100644
+--- a/gdb/testsuite/gdb.replay/tstatus-malformed.exp
++++ b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+@@ -180,3 +180,21 @@ with_test_prefix "tstop without description" {
+ 	    "the status has the stop and no description"
+     }
+ }
++
++# A "tstop" field in the older form at the end of the reply, with
++# nothing after its ':'.  GDB used to skip a character after the ':'
++# before reading the number, which here is the terminating null, and
++# went on reading past the end of the reply.
++with_test_prefix "tstop at the end of the reply" {
++    if { [replay_with_reply $remote_log "T0;tstop:" ".*"] } {
++	set tfile [standard_output_file saved-tstop-end.tf]
++
++	file delete $tfile
++	gdb_test "tsave $tfile" ".*" "tsave"
++
++	set contents [saved_trace_file $tfile]
++
++	gdb_assert { [regexp {(^|\n)status 0;tstop::0(;|\n)} $contents] } \
++	    "the status has the stop and no description"
++    }
++}
+diff --git a/gdb/tracepoint.c b/gdb/tracepoint.c
+index 64ef476c7db..7f42c0b82d5 100644
+--- a/gdb/tracepoint.c
++++ b/gdb/tracepoint.c
+@@ -3284,19 +3284,17 @@ Status line: '%s'\n"), p, line);
+       else if (strncmp (p, stop_reason_names[trace_stop_command], p1 - p) == 0)
+ 	{
+ 	  p2 = strchr (++p1, ':');
+-	  if (!p2 || p2 > p3)
++	  if (p2 == nullptr || p2 > p3)
+ 	    {
+-	      /*older style*/
+-	      p2 = p1;
++	      /* The older style, with no description, only the number of
++		 the tracepoint.  */
++	      p = unpack_varlen_hex (p1, &val);
+ 	    }
+-	  else if (p2 != p1)
++	  else
+ 	    {
+ 	      ts->stop_desc = hex_field_to_string (p1, p2);
++	      p = unpack_varlen_hex (p2 + 1, &val);
+ 	    }
+-	  else
+-	    ts->stop_desc = xstrdup ("");
+-
+-	  p = unpack_varlen_hex (++p2, &val);
+ 	  ts->stop_reason = trace_stop_command;
+ 	}
+       else if (strncmp (p, stop_reason_names[trace_disconnected], p1 - p) == 0)

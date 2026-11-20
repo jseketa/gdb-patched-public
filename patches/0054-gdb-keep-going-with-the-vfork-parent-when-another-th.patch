@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:50:24 +0100
+Subject: [PATCH 54/76] gdb: keep going with the vfork parent when another
+ thread reports an event
+
+An event of another thread during a vfork-done wait made GDB resume that thread (internal_resume_ptid assertion).
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 0b1e81c7859..4ef67ea818c 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -9313,6 +9313,29 @@ stop_if_connecting (struct execution_control_state *ecs)
+ static void
+ keep_going_pass_signal (struct execution_control_state *ecs)
+ {
++  /* While a vfork parent waits for vfork-done, an all-stop target
++     resumes only it (see internal_resume_ptid).  A remote stub may
++     still report an event for another thread, for example one that
++     ignores the thread given with Hc and runs them all.  That thread
++     must not run now, with the breakpoints out: leave it stopped, its
++     stop signal recorded as for any thread that stops and is not the
++     one resumed, and keep going with the vfork parent, as before the
++     event.  */
++  thread_info *vfork_parent
++    = ecs->event_thread->inf->thread_waiting_for_vfork_done;
++  if (!target_is_non_stop_p ()
++      && vfork_parent != nullptr
++      && vfork_parent != ecs->event_thread)
++    {
++      infrun_debug_printf ("%s is not the vfork parent, keep going with %s",
++			   ecs->event_thread->ptid.to_string ().c_str (),
++			   vfork_parent->ptid.to_string ().c_str ());
++      switch_to_thread (vfork_parent);
++      ecs->event_thread = vfork_parent;
++      ecs->ptid = vfork_parent->ptid;
++      ecs->hit_singlestep_breakpoint = 0;
++    }
++
+   gdb_assert (ecs->event_thread->ptid == inferior_ptid);
+   gdb_assert (ecs->event_thread->internal_state () == THREAD_INT_STOPPED);
+ 
+diff --git a/gdb/testsuite/gdb.replay/vfork-other-thread.c b/gdb/testsuite/gdb.replay/vfork-other-thread.c
+new file mode 100644
+index 00000000000..5ae81ff1ec7
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/vfork-other-thread.c
+@@ -0,0 +1,45 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <pthread.h>
++#include <unistd.h>
++
++static pthread_barrier_t barrier;
++
++static void *
++thread_func (void *arg)
++{
++  pthread_barrier_wait (&barrier);
++  for (;;)
++    pause ();
++  return NULL;
++}
++
++int
++main (void)
++{
++  pthread_t thread;
++
++  pthread_barrier_init (&barrier, NULL, 2);
++  pthread_create (&thread, NULL, thread_func, NULL);
++  pthread_barrier_wait (&barrier);
++
++  if (vfork () == 0)
++    _exit (0);
++
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/vfork-other-thread.exp b/gdb/testsuite/gdb.replay/vfork-other-thread.exp
+new file mode 100644
+index 00000000000..7721589ffcf
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/vfork-other-thread.exp
+@@ -0,0 +1,217 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# While a vfork parent waits for vfork-done, GDB resumes only that
++# thread on an all-stop target.  Test a stub that reports an event for
++# another thread then, here a signal that GDB passes on without
++# stopping.  GDB went on to resume that thread and failed an assertion
++# in internal_resume_ptid.  It must leave the thread stopped, resume
++# the vfork parent again, pass the signal on when it resumes all
++# threads after the vfork-done stop, and see the program exit.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++require allow_fork_tests
++
++standard_testfile
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile \
++	  {debug pthreads}] } {
++    return
++}
++
++# Settings for recording and replaying alike.
++proc common_settings {} {
++    gdb_test_no_output "set sysroot"
++    gdb_test_no_output "maint set target-non-stop off"
++    gdb_test "handle SIGUSR1 nostop noprint pass" \
++	"SIGUSR1 +No\tNo\tYes.*"
++}
++
++# Run the program to its end through gdbserver, all-stop, with a
++# remote log in LOG_FILENAME.  Read the registers once with "maint
++# packet g", so that the log has a reply to copy.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    common_settings
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "maint packet g" "received: \"\[0-9a-fx\]+\"" "read registers"
++    gdb_test "continue" "\\\[Inferior 1 \\(process $::decimal\\) exited normally\\\]" \
++	"continue to the end"
++}
++
++# Return the packet P framed as in a remote log: $P#checksum.
++proc framed { p } {
++    set sum 0
++    foreach c [split $p ""] {
++	scan $c %c v
++	incr sum $v
++    }
++    return [format {$%s#%02x} $p [expr {$sum % 256}]]
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME, with a stop of another
++# thread for SIGUSR1 as the reply to the resume after the vfork, before
++# the vfork-done stop.  GDB then has to read the registers of the
++# vfork parent and resume it in the same way again: the packets from
++# the reply to the detach of the child up to the resume, once more.
++# Return true if the packets were found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    # The registers, from "maint packet g".
++    set g [lsearch -regexp $lines {^w \$g#67$}]
++    if { $g == -1 } {
++	return false
++    }
++    set g_reply [lindex $lines [expr {$g + 1}]]
++
++    # The resume after the detach of the vfork child, and the
++    # vfork-done stop it got.
++    set d [lsearch -regexp $lines {^w \$D;}]
++    if { $d == -1 } {
++	return false
++    }
++    set r [lsearch -start $d -regexp $lines {^w \$(vCont;[cs]|[cs])[:;#]}]
++    if { $r == -1 } {
++	return false
++    }
++    set done [lindex $lines [expr {$r + 1}]]
++    if { ![regexp {^r \$T05vforkdone:;(.*)thread:(p([0-9a-f]+)\.[0-9a-f]+);} \
++	       $done -> regs parent pid] } {
++	return false
++    }
++    scan $pid %x n
++    set other [format "p%s.%x" $pid [expr {$n + 1}]]
++
++    # gdbreplay adds the checksum to the replies.
++    set lines [linsert $lines [expr {$r + 1}] \
++		   "r \$T1e${regs}thread:$other;" \
++		   "w [framed Hg$parent]" "r [framed OK]" \
++		   [lindex $lines $g] $g_reply \
++		   {*}[lrange $lines [expr {$d + 2}] $r]]
++
++    # The other thread's signal is delivered when GDB resumes all
++    # threads again, after the vfork-done stop.
++    set v [lsearch -regexp $lines {^r \$T05vforkdone:}]
++    set c [lsearch -start $v -regexp $lines "^w \\\$vCont;c:p$pid\\.-1#"]
++    if { $c == -1 } {
++	return false
++    }
++    set lines [lreplace $lines $c $c \
++		   "w [framed "vCont;C1e:$other;c:p$pid.-1"]"]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME up to GDB's request for
++# the registers of the vfork parent after the stop of the other thread:
++# the connection closes while GDB reads them.  Return true if the
++# packet was found.
++proc make_cut_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set s [lsearch -regexp $lines {^r \$T1e}]
++    if { $s == -1 } {
++	return false
++    }
++    set g [lsearch -start $s -regexp $lines {^w \$g#67$}]
++    if { $g == -1 } {
++	return false
++    }
++
++    set fd [open $out_filename "w"]
++    foreach l [lrange $lines 0 $g] {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++set cut_log [standard_output_file replay-cut.log]
++
++record_initial_logfile $remote_log
++
++if { ![make_replay_log $remote_log $modified_log]
++     || ![make_cut_log $modified_log $cut_log] } {
++    fail "couldn't make the replay logs"
++    return
++}
++
++# Replay LOG: connect, read the registers as when recording, and
++# continue.
++proc replay { log } {
++    clean_restart $::testfile
++
++    gdb_test "disconnect" ".*"
++    common_settings
++
++    set res [gdbreplay_start $log]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test "target $protocol $port" "Remote debugging using .*" "connect"
++    gdb_test "maint packet g" "received: \"\[0-9a-fx\]+\"" \
++	"read registers"
++}
++
++with_test_prefix "whole session" {
++    replay $modified_log
++    gdb_test "continue" \
++	"\\\[Inferior 1 \\(process $decimal\\) exited normally\\\]" \
++	"continue, with a stop of another thread during the vfork"
++}
++
++# The connection closes while GDB reads the registers of the vfork
++# parent to resume it.  That must end the session, not leave GDB going
++# on without its target.
++with_test_prefix "connection closed" {
++    replay $cut_log
++    gdb_test "continue" \
++	"Remote (connection closed|communication error\\.  Target disconnected:.*)" \
++	"continue, the connection closes"
++    gdb_test "info threads" "No threads\\." "no threads"
++}

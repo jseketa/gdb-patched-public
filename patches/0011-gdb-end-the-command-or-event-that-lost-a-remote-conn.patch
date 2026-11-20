@@ -1,0 +1,176 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 16:39:08 +0100
+Subject: [PATCH 11/76] gdb: end the command or event that lost a remote
+ connection with that error
+
+Code that turned the error into text hid the loss; the command or stop event that lost the connection now ends with that error.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 08fac30e9e8..08919bc8a96 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -22,6 +22,7 @@
+ #include "cli/cli-style.h"
+ #include "displaced-stepping.h"
+ #include "infrun.h"
++#include "remote.h"
+ #include "exceptions.h"
+ #include "symtab.h"
+ #include "frame.h"
+@@ -4645,6 +4646,7 @@ fetch_inferior_event ()
+ 
+   execution_control_state ecs;
+   int cmd_done = 0;
++  unsigned int losses_before = remote_unexpected_loss_count ();
+ 
+   /* Events are always processed with the main UI as current UI.  This
+      way, warnings, debug output, etc. are always consistently sent to
+@@ -4914,6 +4916,12 @@ fetch_inferior_event ()
+      removed inferiors appear before the prompt.  */
+   prune_inferiors ();
+ 
++  /* Handling the event lost a remote connection, and whatever met the
++     error went on (a stop printed with "<error reading variable: ...>").
++     End the event with that error, before the prompt comes back.  */
++  if (remote_connection_lost_since (losses_before))
++    throw_error (TARGET_CLOSE_ERROR, _("Remote connection closed"));
++
+   /* If a UI was in sync execution mode, and now isn't, restore its
+      prompt (a synchronous execution command has finished, and we're
+      ready for input).  */
+diff --git a/gdb/main.c b/gdb/main.c
+index 8d2176362d9..9ea25fe3a8c 100644
+--- a/gdb/main.c
++++ b/gdb/main.c
+@@ -396,10 +396,17 @@ start_event_loop ()
+   while (1)
+     {
+       int result = 0;
++      unsigned int losses_before = remote_unexpected_loss_count ();
+ 
+       try
+ 	{
+ 	  result = current_interpreter ()->do_one_event ();
++
++	  /* An event (e.g. the stop of a program running in the
++	     background) that lost a remote connection and went on as if
++	     it had not: tell the user, as a command would.  */
++	  if (remote_connection_lost_since (losses_before))
++	    throw_error (TARGET_CLOSE_ERROR, _("Remote connection closed"));
+ 	}
+       catch (const gdb_exception_forced_quit &ex)
+ 	{
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 6319dd22ecf..54da3f83503 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -600,6 +600,10 @@ class remote_state
+   /* Whether we are async, once the connection is lost.  */
+   bool lost_async = false;
+ 
++  /* True while GDB sends a request the stub may answer by closing the
++     connection (the 'k' packet): losing it then is no failure.  */
++  bool loss_expected = false;
++
+   /* If we negotiated packet size explicitly (and thus can bypass
+      heuristics for the largest packet size that will not overflow
+      a buffer in the stub), this will be set to that packet size.
+@@ -6633,6 +6637,19 @@ remote_unpush_target (remote_target *target)
+   fileio_handles_invalidate_target (target);
+ }
+ 
++/* The number of remote connections lost when GDB did not ask for it.
++   See remote_unexpected_loss_count.  */
++
++static unsigned int remote_unexpected_losses;
++
++/* See remote.h.  */
++
++unsigned int
++remote_unexpected_loss_count ()
++{
++  return remote_unexpected_losses;
++}
++
+ /* The connection of TARGET has failed, or the user gave up on it.  The
+    caller throws TARGET_CLOSE_ERROR.
+ 
+@@ -6669,6 +6686,18 @@ remote_connection_failed (remote_target *target)
+   fileio_handles_invalidate_target (target);
+ 
+   lost_remote_targets.push_back (target_ops_ref::new_reference (target));
++
++  if (!rs->loss_expected)
++    remote_unexpected_losses++;
++}
++
++/* See remote.h.  */
++
++bool
++remote_connection_lost_since (unsigned int losses_before)
++{
++  return (remote_unexpected_losses != losses_before
++	  && !lost_remote_targets.empty ());
+ }
+ 
+ /* Throw TARGET_CLOSE_ERROR if the connection of the remote target RS
+@@ -11320,6 +11349,8 @@ remote_target::remote_kill_k ()
+ {
+   /* Catch errors so the user can quit from gdb even when we
+      aren't on speaking terms with the remote system.  */
++  remote_state *rs = get_remote_state ();
++  scoped_restore expect_loss = make_scoped_restore (&rs->loss_expected, true);
+   try
+     {
+       putpkt ("k");
+diff --git a/gdb/remote.h b/gdb/remote.h
+index 249a9057845..fe72091b89a 100644
+--- a/gdb/remote.h
++++ b/gdb/remote.h
+@@ -132,4 +132,20 @@ extern bool remote_register_is_expedited (int regnum);
+ 
+ extern void remote_unpush_lost_targets ();
+ 
++/* The number of remote connections lost so far that GDB did not ask to
++   lose.  Code that turns the error of a lost connection into text and
++   goes on (a value printed as "<error reading variable: ...>") hides
++   the loss; comparing this before and after a command or an event
++   finds that out.  */
++
++extern unsigned int remote_unexpected_loss_count ();
++
++/* Whether a remote connection was lost when GDB did not ask for it
++   since remote_unexpected_loss_count returned LOSSES_BEFORE, and its
++   target is still there.  If the code that met the loss has already
++   dealt with it (e.g. a script that caught the error, killed the
++   program and connected again), there is nothing left to tell.  */
++
++extern bool remote_connection_lost_since (unsigned int losses_before);
++
+ #endif /* GDB_REMOTE_H */
+diff --git a/gdb/top.c b/gdb/top.c
+index 5f4989138b4..0966bf3be50 100644
+--- a/gdb/top.c
++++ b/gdb/top.c
+@@ -521,6 +521,7 @@ execute_command (const char *p, int from_tty)
+ 
+   auto cleanup_if_error = make_scope_exit (bpstat_clear_actions);
+   scoped_value_mark cleanup = prepare_execute_command ();
++  unsigned int losses_before = remote_unexpected_loss_count ();
+ 
+   /* This can happen when command_line_input hits end of file.  */
+   if (p == NULL)
+@@ -630,6 +631,12 @@ execute_command (const char *p, int from_tty)
+ 
+       maybe_wait_sync_command_done (was_sync);
+ 
++      /* A remote connection lost during the command ends it with that
++	 error, also when the code that met the error turned it into
++	 text and went on.  */
++      if (remote_connection_lost_since (losses_before))
++	throw_error (TARGET_CLOSE_ERROR, _("Remote connection closed"));
++
+       /* If this command has been post-hooked, run the hook last.
+ 	 We need to lookup the command again since during its execution,
+ 	 a command may redefine itself.  In this case, C pointer

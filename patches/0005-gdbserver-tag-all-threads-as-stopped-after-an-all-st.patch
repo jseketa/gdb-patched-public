@@ -1,11 +1,135 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Josip Seketa <josip.seketa@gmail.com>
 Date: Fri, 6 Nov 2026 15:20:52 +0100
-Subject: [PATCH 05/65] gdbserver: tag all threads as stopped after an all-stop
+Subject: [PATCH 05/76] gdbserver: tag all threads as stopped after an all-stop
  vAttach
 
 Otherwise gdbserver can resume attached threads that GDB believes are stopped.
 
+diff --git a/gdb/testsuite/gdb.threads/attach-schedlock-stepi.c b/gdb/testsuite/gdb.threads/attach-schedlock-stepi.c
+new file mode 100644
+index 00000000000..3791f7ec82d
+--- /dev/null
++++ b/gdb/testsuite/gdb.threads/attach-schedlock-stepi.c
+@@ -0,0 +1,55 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <pthread.h>
++#include <unistd.h>
++
++#define NTHREADS 10
++
++/* Incremented by the threads that the testcase never resumes.  */
++volatile unsigned long counter;
++
++/* Incremented by the main thread, which the testcase steps.  */
++volatile unsigned long tick;
++
++/* Set to 1 once all threads run.  */
++volatile int started;
++
++static void *
++spin (void *arg)
++{
++  for (;;)
++    counter++;
++  return arg;
++}
++
++int
++main (void)
++{
++  pthread_t thread;
++  int i;
++
++  alarm (60);
++
++  for (i = 0; i < NTHREADS; i++)
++    pthread_create (&thread, NULL, spin, NULL);
++
++  started = 1;
++
++  for (;;)
++    tick++;
++}
+diff --git a/gdb/testsuite/gdb.threads/attach-schedlock-stepi.exp b/gdb/testsuite/gdb.threads/attach-schedlock-stepi.exp
+new file mode 100644
+index 00000000000..228423c022d
+--- /dev/null
++++ b/gdb/testsuite/gdb.threads/attach-schedlock-stepi.exp
+@@ -0,0 +1,57 @@
++# Copyright 2026 Free Software Foundation, Inc.
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Attach to a running multi-threaded process, and step one thread with
++# scheduler-locking on.  No other thread may run.  With gdbserver,
++# threads that were never reported to GDB after vAttach used to be
++# resumed behind GDB's back.
++
++require can_spawn_for_attach
++
++standard_testfile
++
++if { [build_executable "failed to prepare" $testfile $srcfile \
++	  {debug pthreads}] } {
++    return
++}
++
++set test_spawn_id [spawn_wait_for_attach $binfile]
++set testpid [spawn_id_get_pid $test_spawn_id]
++
++clean_restart $testfile
++
++gdb_test "attach $testpid" "Attaching to.*" "attach"
++
++# The threads may not have been started yet when we attached.  Do not
++# try again in that case: the test is only meaningful with them.
++if { [get_integer_valueof "started" 0] == 0 } {
++    unsupported "attached too early"
++    kill_wait_spawned_process $test_spawn_id
++    return
++}
++
++gdb_test_no_output "set scheduler-locking on"
++gdb_test "thread 1" "Switching to thread 1.*"
++
++set pc_before [get_hexadecimal_valueof "\$pc" "unknown" "pc before stepi"]
++set before [get_integer_valueof "counter" -1 "counter before stepi"]
++gdb_test "stepi" ".*" "step the main thread"
++set after [get_integer_valueof "counter" -2 "counter after stepi"]
++set pc_after [get_hexadecimal_valueof "\$pc" "unknown" "pc after stepi"]
++
++gdb_assert { $pc_before != $pc_after } "the main thread stepped"
++gdb_assert { $before == $after } "other threads did not run"
++
++kill_wait_spawned_process $test_spawn_id
 diff --git a/gdbserver/server.cc b/gdbserver/server.cc
 index 74774fcde7c..90307c38b50 100644
 --- a/gdbserver/server.cc

@@ -1,0 +1,208 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:39:55 +0100
+Subject: [PATCH 52/76] gdb/remote: keep the selected thread when a thread list
+ names a new process
+
+A process first named by the thread list read at a stop left GDB with no thread selected (inferior_thread assertion).
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index db4bbb81597..49f3d1735eb 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -3291,12 +3291,15 @@ remote_target::remote_notice_new_inferior (ptid_t currthread,
+ 	{
+ 	  bool fake_pid_p = !m_features.remote_multi_process_p ();
+ 
++	  /* Leave the selected thread and inferior unchanged:
++	     remote_add_inferior switches to the new inferior, and so
++	     does fetching its target description.  */
++	  scoped_restore_current_thread restore_thread;
++
+ 	  inf = remote_add_inferior (fake_pid_p,
+ 				     currthread.pid (), -1, 1);
+ 
+-	  /* Fetch the target description for this inferior.  Make sure to
+-	     leave the currently selected inferior unchanged.  */
+-	  scoped_restore_current_thread restore_thread;
++	  /* Fetch the target description for this inferior.  */
+ 	  switch_to_inferior_no_thread (inf);
+ 	  target_find_description ();
+ 	}
+diff --git a/gdb/testsuite/gdb.replay/new-process-in-thread-list.exp b/gdb/testsuite/gdb.replay/new-process-in-thread-list.exp
+new file mode 100644
+index 00000000000..8b8243722cb
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/new-process-in-thread-list.exp
+@@ -0,0 +1,171 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test a stub whose thread list, read when GDB has set up the
++# connection and reports the stop, names a process GDB has not seen
++# before.  GDB added an inferior for it and was left with that
++# inferior selected and no thread, and normal_stop failed an
++# assertion in inferior_thread.  GDB must add the inferior and keep
++# the stopped thread selected.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile connect.c
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Settings for recording and replaying alike, so that a new process
++# costs GDB no packets other than selecting it and reading its target
++# description.
++proc common_settings {} {
++    gdb_test_no_output "set sysroot"
++    gdb_test_no_output "maint set target-non-stop off"
++    gdb_test "set remote query-attached-packet off" \
++	"Support for the 'qAttached' packet .* is set to \"off\"\\."
++    gdb_test "set remote pid-to-exec-file-packet off" \
++	"Support for the 'qXfer:exec-file:read' packet .* is set to \"off\"\\."
++    gdb_test "set remote read-btrace-conf-packet off" \
++	"Support for the 'qXfer:btrace-conf' packet .* is set to \"off\"\\."
++}
++
++# Connect to gdbserver with a remote log in LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    common_settings
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "disconnect" ".*" "disconnect after recording"
++}
++
++# Return the packet P framed as in a remote log: $P#checksum.
++proc framed { p } {
++    set sum 0
++    foreach c [split $p ""] {
++	scan $c %c v
++	incr sum $v
++    }
++    return [format {$%s#%02x} $p [expr {$sum % 256}]]
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME, with the last thread
++# list naming a second process, and after it the packets GDB sends for
++# a new process: it selects the process (it has no thread yet: Hgp0.0)
++# and reads the target description again, the same exchange as after
++# the reply to '?'.  Then it selects the stopped thread again.  Return
++# true if the packets were found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set q [lsearch -regexp $lines {^w \+?\$\?#}]
++    set t [lindex [lsearch -all -regexp $lines \
++		       {^w \+?\$qXfer:threads:read:}] end]
++    if { $q == -1 || $t eq "" || $t < $q } {
++	return false
++    }
++
++    # The stopped thread, from the reply to '?'.
++    if { ![regexp {thread:(p[0-9a-f]+\.[0-9a-f]+);} \
++	       [lindex $lines [expr {$q + 1}]] -> stopped] } {
++	return false
++    }
++
++    # The thread list reply, without its checksum.
++    set r [expr {$t + 1}]
++    if { ![regexp {^(r \+?\$l<threads>.*)(</threads>.*)#..$} \
++	       [lindex $lines $r] -> head tail] } {
++	return false
++    }
++
++    # The target description exchange after the reply to '?'.
++    set tdesc {}
++    for {set i $q} {$i < $t} {incr i} {
++	if { [regexp {^w \+?\$qXfer:features:read:} [lindex $lines $i]] } {
++	    lappend tdesc [lindex $lines $i] [lindex $lines [expr {$i + 1}]]
++	}
++    }
++    if { [llength $tdesc] == 0 } {
++	return false
++    }
++
++    # gdbreplay adds the checksum to the reply.
++    set new {<thread id="p7ffffff0.7ffffff0" core="0"/>\n}
++    set lines [lreplace $lines $r $r "$head$new$tail"]
++    set ok "r [framed OK]"
++    set lines [linsert $lines [expr {$r + 1}] \
++		   "w [framed Hgp0.0]" $ok {*}$tdesc \
++		   "w [framed Hg$stopped]" $ok]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![make_replay_log $remote_log $modified_log] } {
++    fail "couldn't make the replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++common_settings
++
++set res [gdbreplay_start $modified_log]
++set protocol [lindex $res 0]
++set port [lindex $res 1]
++
++gdb_test "target $protocol $port" \
++    "Remote debugging using .*\\\[New inferior 2\\\].*" \
++    "connect"
++
++gdb_test "info inferiors" \
++    [multi_line \
++	 "\\* 1 +process $decimal +.*" \
++	 "  2 +process 2147483632 +.*"] \
++    "inferior 1 is still selected"
++
++gdb_test "thread" "Current thread is 1\\.1 .*" "thread 1.1 is still selected"

@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 23:24:28 +0100
+Subject: [PATCH 15/76] gdb: do not set up the solib_ops again after an exec at
+ connect
+
+Connecting to a program stopped at an exec set up its solib_ops twice and asserted.
+
+diff --git a/gdb/infcmd.c b/gdb/infcmd.c
+index 6592d1b3299..de187106f6c 100644
+--- a/gdb/infcmd.c
++++ b/gdb/infcmd.c
+@@ -2758,7 +2758,11 @@ setup_inferior (int from_tty)
+   /* Take any necessary post-attaching actions for this platform.  */
+   target_post_attach (inferior->pid);
+ 
+-  post_create_inferior (from_tty, true);
++  /* If the program stopped at an exec (a remote target can report
++     one while GDB connects), follow_exec has already set the program
++     space up for the new program, its solib_ops included.  */
++  post_create_inferior (from_tty,
++			current_program_space->solib_ops ().empty ());
+ }
+ 
+ /* What to do after the first program stops after attaching.  */
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index a3aff64171c..c3ff1d6e0fb 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -3876,8 +3876,11 @@ start_remote (int from_tty)
+ 
+   /* Now that the inferior has stopped, do any bookkeeping like
+      loading shared libraries.  We want to do this before normal_stop,
+-     so that the displayed frame is up to date.  */
+-  post_create_inferior (from_tty, true);
++     so that the displayed frame is up to date.  If the target reported
++     the program stopped at an exec, follow_exec has already set the
++     program space up for the new program, its solib_ops included.  */
++  post_create_inferior (from_tty,
++			current_program_space->solib_ops ().empty ());
+ 
+   normal_stop ();
+ }
+diff --git a/gdb/testsuite/gdb.server/reconnect-at-exec.c b/gdb/testsuite/gdb.server/reconnect-at-exec.c
+new file mode 100644
+index 00000000000..5d8c8999567
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/reconnect-at-exec.c
+@@ -0,0 +1,29 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <unistd.h>
++
++int
++main (int argc, char **argv)
++{
++  /* The second time, after the exec, just exit.  */
++  if (argc > 1)
++    return 0;
++
++  execl (argv[0], argv[0], "again", (char *) 0);
++  return 1;
++}
+diff --git a/gdb/testsuite/gdb.server/reconnect-at-exec.exp b/gdb/testsuite/gdb.server/reconnect-at-exec.exp
+new file mode 100644
+index 00000000000..00e15fd2c45
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/reconnect-at-exec.exp
+@@ -0,0 +1,66 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Stop a program at an exec catchpoint, disconnect, and connect again.
++# gdbserver then reports the exec as the program's stop.  GDB used to
++# follow the exec, resume the program while connecting, and fail an
++# assertion in post_create_inferior.  It must connect with the program
++# still stopped at the exec, and be able to run it to its end.
++
++if {[target_info gdb_protocol] != "extended-remote"} {
++    unsupported "requires extended-remote"
++    return
++}
++
++require {is_any_target "*-*-linux*"}
++require allow_fork_tests
++
++set gdbserver_reconnect_p 1
++if { [info proc gdb_reconnect] == "" } {
++    unsupported "requires gdbserver reconnect"
++    return
++}
++
++standard_testfile
++
++if {[prepare_for_testing "failed to prepare" $testfile $srcfile debug]} {
++    return
++}
++
++if {![runto_main]} {
++    return
++}
++
++# The exec'd program runs main again; only the catchpoint should stop
++# it.
++delete_breakpoints
++
++gdb_test "catch exec" "Catchpoint $decimal \\(exec\\)"
++gdb_test "continue" "Catchpoint $decimal \\(exec'd .*\\).*" \
++    "continue to the exec"
++
++gdb_test "disconnect" ".*"
++
++# An internal error is not matched by gdb_reconnect's patterns.
++if { [gdb_reconnect] == 0 } {
++    pass "reconnect at the exec"
++} else {
++    fail "reconnect at the exec"
++    return
++}
++
++gdb_test "info threads" "\\* 1 +\[^\r\n\]+" "the program is stopped"
++gdb_test "continue" "\\\[Inferior 1 \\(process $decimal\\) exited normally\\\]" \
++    "continue to the end"

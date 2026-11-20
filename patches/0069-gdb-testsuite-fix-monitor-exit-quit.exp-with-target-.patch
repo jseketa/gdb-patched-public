@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 19:04:18 +0100
+Subject: [PATCH 69/76] gdb/testsuite: fix monitor-exit-quit.exp with
+ target-non-stop on
+
+A non-stop target notices the closed connection at the prompt; expect the message then.
+
+diff --git a/gdb/testsuite/gdb.server/monitor-exit-quit.exp b/gdb/testsuite/gdb.server/monitor-exit-quit.exp
+index 86d990b3220..85742211302 100644
+--- a/gdb/testsuite/gdb.server/monitor-exit-quit.exp
++++ b/gdb/testsuite/gdb.server/monitor-exit-quit.exp
+@@ -49,7 +49,21 @@ set gdbserver_protocol [lindex $res 0]
+ set gdbserver_gdbport [lindex $res 1]
+ gdb_target_cmd $gdbserver_protocol $gdbserver_gdbport
+ 
+-gdb_test_no_output "monitor exit"
++# With a non-stop target the remote connection stays async at the
++# prompt, so GDB notices at once that gdbserver has gone and says so.
++# Otherwise it only notices with the next command.
++if {[is_target_non_stop]} {
++    gdb_test_multiple "monitor exit" "" {
++	-re "Remote connection closed\r\n$gdb_prompt $" {
++	    pass $gdb_test_name
++	}
++	-re "^monitor exit\r\n$gdb_prompt " {
++	    exp_continue
++	}
++    }
++} else {
++    gdb_test_no_output "monitor exit"
++}
+ gdb_test_no_output "set confirm off"
+ 
+ set do_cleanup 1

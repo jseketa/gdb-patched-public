@@ -1,0 +1,272 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 04:17:50 +0100
+Subject: [PATCH 27/76] gdb: do not fail to resume when the thread has exited
+
+handle_thread_exited could pick a dead thread, and resume_1 threw on its registers.
+
+diff --git a/gdb/infrun.c b/gdb/infrun.c
+index 931a29fb2dd..dcbeec23992 100644
+--- a/gdb/infrun.c
++++ b/gdb/infrun.c
+@@ -2764,7 +2764,9 @@ resume_1 (enum gdb_signal sig)
+       step = false;
+     }
+ 
+-  CORE_ADDR pc = regcache_read_pc (regcache);
++  /* Protected, as this thread may have exited with the process, and
++     the target will tell us so once it is resumed.  */
++  CORE_ADDR pc = regcache_read_pc_protected (regcache);
+ 
+   infrun_debug_printf ("step=%d, signal=%s, trap_expected=%d, "
+ 		       "current thread [%s] at %s",
+diff --git a/gdb/testsuite/gdb.replay/exited-thread-no-registers.c b/gdb/testsuite/gdb.replay/exited-thread-no-registers.c
+new file mode 100644
+index 00000000000..184d07dcbfe
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/exited-thread-no-registers.c
+@@ -0,0 +1,34 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <pthread.h>
++
++static void *
++thread_func (void *arg)
++{
++  return NULL;	/* Thread breakpoint.  */
++}
++
++int
++main (void)
++{
++  pthread_t thread;
++
++  pthread_create (&thread, NULL, thread_func, NULL);
++  pthread_join (thread, NULL);
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/exited-thread-no-registers.exp b/gdb/testsuite/gdb.replay/exited-thread-no-registers.exp
+new file mode 100644
+index 00000000000..b257ad8c143
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/exited-thread-no-registers.exp
+@@ -0,0 +1,204 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# This test confirms how GDB handles a whole process exiting while GDB
++# is stepping one of its threads over a breakpoint, on an all-stop
++# target.  The target reports that the stepped thread exited.  GDB then
++# resumes the threads that are left, but they have exited too, and
++# their registers can no longer be read.
++#
++# GDB used to read the PC of the thread it was about to resume, and
++# give up with an error.  It never resumed the target, so the target
++# never got to report the exit of the process.
++#
++# The timing of this is hard to get on a real target, so a real session
++# is recorded, and then edited.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile
++
++if { [build_executable "failed to build exec" $testfile $srcfile {debug pthreads}] } {
++    return
++}
++
++# Connect to the target and get all-stop, as with a target in non-stop
++# mode GDB takes another path.  PROTOCOL and PORT say how to connect.
++proc_with_prefix connect_all_stop { protocol port } {
++    gdb_test_no_output "maint set target-non-stop off"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	return false
++    }
++    return true
++}
++
++# Start the inferior and record a remote log, in LOG_FILENAME, of GDB
++# stepping a thread over a breakpoint, up to the exit of the inferior.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot" \
++	"setting sysroot before starting gdbserver"
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![connect_all_stop $protocol $port]} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_breakpoint thread_func
++    gdb_continue_to_breakpoint "continuing to thread_func"
++
++    gdb_test "continue" "exited normally.*" "continue to exit"
++}
++
++# Return the remote protocol form of PAYLOAD, with its checksum.
++proc packet { payload } {
++    set sum 0
++    foreach c [split $payload ""] {
++	incr sum [scan $c %c]
++    }
++    return [format "\$%s#%02x" $payload [expr {$sum & 0xff}]]
++}
++
++# Return the length of PAYLOAD, a packet that may be run-length encoded.
++proc decoded_length { payload } {
++    set length 0
++    set n [string length $payload]
++    for { set i 0 } { $i < $n } { incr i } {
++	if { [string index $payload $i] == "*" } {
++	    incr i
++	    incr length [expr {[scan [string index $payload $i] %c] - 29}]
++	} else {
++	    incr length
++	}
++    }
++    return $length
++}
++
++# Copy the remote log from IN_FILENAME to OUT_FILENAME, changing what
++# happens after GDB's last single-step of a thread, which is the step
++# over the breakpoint.  The log then has that thread exiting, and a
++# leader with no registers.  Return true if the log could be changed.
++proc update_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    # Find the last single-step, and the size of the registers.
++    set step -1
++    set g_length 0
++    for { set i 0 } { $i < [llength $lines] } { incr i } {
++	set line [lindex $lines $i]
++	if { [regexp {^w \$vCont;s:p([0-9a-f]+)\.([0-9a-f]+)#} $line \
++		  match pid tid] } {
++	    set step $i
++	    set step_pid $pid
++	    set step_tid $tid
++	} elseif { $line == "w [packet g]" && $g_length == 0 } {
++	    regexp {\$(.*)#} [lindex $lines [expr {$i + 1}]] match payload
++	    set g_length [decoded_length $payload]
++	}
++    }
++    if { $step == -1 || $g_length == 0 } {
++	return false
++    }
++
++    # The line after the step is its stop reply, and the breakpoint is
++    # inserted again after that.
++    set reply [expr {$step + 1}]
++    set insert [expr {$reply + 1}]
++    set insert_reply [expr {$insert + 1}]
++    if { ![regexp {^w \$Z0,} [lindex $lines $insert]] } {
++	return false
++    }
++
++    # The thread exited.  Then GDB selects the leader and reads its
++    # registers, and gets a reply of 'x' digits, which marks them
++    # unavailable.
++    set lines [lreplace $lines $reply $reply \
++		   "r [packet w0\;p$step_pid.$step_tid]"]
++    set lines [linsert $lines [expr {$insert_reply + 1}] \
++		   "w [packet Hgp$step_pid.$step_pid]" \
++		   "r [packet OK]" \
++		   "w [packet g]" \
++		   "r [packet [string repeat x $g_length]]"]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++# Replay REMOTE_LOG, and check that GDB sees the exit of the inferior.
++proc_with_prefix replay_with_log { remote_log } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot"
++
++    set res [gdbreplay_start $remote_log]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    if {![connect_all_stop $protocol $port]} {
++	fail "couldn't connect to gdbreplay"
++	return
++    }
++
++    gdb_breakpoint thread_func
++    gdb_continue_to_breakpoint "continuing to thread_func"
++
++    gdb_test "continue" "exited normally.*" "continue to exit"
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![update_replay_log $remote_log $modified_log] } {
++    fail "couldn't update remote replay log"
++    return
++}
++
++with_test_prefix "with unmodified log" {
++    # This confirms that the session can be replayed at all.
++    replay_with_log $remote_log
++}
++
++with_test_prefix "with modified log" {
++    replay_with_log $modified_log
++}

@@ -1,0 +1,257 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 04:36:16 +0100
+Subject: [PATCH 76/76] gdb/testsuite: test losing the remote connection during
+ next
+
+New test replays a next cut at chosen packets; next must end with the error and GDB stay alive.
+
+diff --git a/gdb/testsuite/gdb.replay/step-connection-closed.c b/gdb/testsuite/gdb.replay/step-connection-closed.c
+new file mode 100644
+index 00000000000..2523465d9d1
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/step-connection-closed.c
+@@ -0,0 +1,30 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++static int
++leaf (int x)
++{
++  return x * 2;
++}
++
++int
++main (void)
++{
++  int a = leaf (3);
++  a = leaf (a);
++  return a == 12 ? 0 : 1;
++}
+diff --git a/gdb/testsuite/gdb.replay/step-connection-closed.exp b/gdb/testsuite/gdb.replay/step-connection-closed.exp
+new file mode 100644
+index 00000000000..855d1423828
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/step-connection-closed.exp
+@@ -0,0 +1,207 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test that GDB survives the remote connection closing during "next",
++# from a breakpoint at main.
++#
++# A real session with gdbserver is recorded: run to main, then "next".
++# Then copies of the log are made that end at a chosen packet from GDB
++# after "next" has first resumed the program, before the stub's reply;
++# gdbreplay closes the connection when its log ends.  The cut points
++# are the first two breakpoint insertions that keep the step going
++# (GDB stopped stepping and went on without its target), and, with
++# "maint set target-non-stop on", the first register write (the PC of
++# the displaced step over the breakpoint at main, whose buffers were
++# gone by the time GDB reset them).  For each,
++# "next" must end with an error, and GDB must stay alive.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile
++
++if { [build_executable "failed to build exec" $testfile $srcfile {debug}] } {
++    return
++}
++
++# Settings for recording and replaying alike.
++proc common_settings { target_non_stop } {
++    gdb_test_no_output "set sysroot"
++    gdb_test_no_output "maint set target-non-stop $target_non_stop"
++}
++
++# Run the test program to main through gdbserver in extended mode, and
++# do "next", with the remote log going to LOG_FILENAME.  The "maint
++# packet" sends a packet that marks where "next" starts in the log.
++proc_with_prefix record_initial_logfile { log_filename target_non_stop } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    common_settings $target_non_stop
++
++    set res [gdbserver_start "--multi" ""]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	unsupported "couldn't connect to gdbserver"
++	return false
++    }
++
++    gdb_test_no_output "set remote exec-file $::binfile"
++    gdb_test "break main" "Breakpoint $::decimal at .*"
++    if { [gdb_test "run" "Breakpoint $::decimal, main .*" \
++	      "run to main"] != 0 } {
++	return false
++    }
++    gdb_test "maint packet qStepMarker" "received: \"\"" "mark the log"
++    gdb_test "next" "$::decimal\[ \t\]+a = leaf \\(a\\);" "next"
++
++    # The log is complete only once GDB closes it.
++    gdb_test "kill" "\\\[Inferior 1 \\(process $::decimal\\) killed\\\]" \
++	"kill" "Kill the program being debugged\\? \\(y or n\\) $" "y"
++    gdb_test "disconnect" ".*" "disconnect after recording"
++    gdbserver_exit 0
++
++    return true
++}
++
++# Return the packet part of a log line, that is the text between the
++# leading '$' and the '#' of the checksum, or the empty string.
++proc log_packet { line } {
++    if { [regexp {^[wr] \+?\$([^#]*)#} $line match payload] } {
++	return $payload
++    }
++    return ""
++}
++
++# Return the index of the line of LINES with the NTH packet (counting
++# from 1) that GDB sent after the marker, and also after the first
++# resume (vCont) that follows it if AFTER_RESUME, and whose payload
++# matches REGEXP, or the empty string.  Breakpoints inserted after the
++# first resume are inserted by keep_going.
++proc cut_index { lines regexp nth after_resume } {
++    set marked false
++    set resumed [expr {!$after_resume}]
++    set n 0
++    for { set i 0 } { $i < [llength $lines] } { incr i } {
++	set line [lindex $lines $i]
++	if { ![regexp {^w } $line] } {
++	    continue
++	}
++	set payload [log_packet $line]
++	if { !$marked } {
++	    set marked [string match "qStepMarker" $payload]
++	} elseif { !$resumed } {
++	    set resumed [string match "vCont;*" $payload]
++	} elseif { [regexp -- $regexp $payload] } {
++	    incr n
++	    if { $n == $nth } {
++		return $i
++	    }
++	}
++    }
++    return ""
++}
++
++# Replay the log REMOTE_LOG, which ends early, run to main and do
++# "next".  GDB must report the lost connection with an error, and then
++# still answer commands.
++proc_with_prefix replay_cut_log { remote_log target_non_stop } {
++    clean_restart $::testfile
++
++    gdb_test "disconnect" ".*"
++    common_settings $target_non_stop
++
++    set res [gdbreplay_start $remote_log]
++    set port [lindex $res 1]
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	fail "couldn't connect to gdbreplay"
++	return
++    }
++
++    gdb_test_no_output "set remote exec-file $::binfile"
++    gdb_test "break main" "Breakpoint $::decimal at .*"
++    gdb_test "run" "Breakpoint $::decimal, main .*" "run to main"
++    gdb_test "maint packet qStepMarker" "received: \"\"" "mark the log"
++
++    # An internal error is not matched here, and makes the test fail.
++    gdb_test_multiple "next" "next loses the connection" {
++	-re "(Remote connection closed|Remote communication error\\.  Target disconnected: \[^\r\n\]*)\r\n.*$::gdb_prompt $" {
++	    pass $gdb_test_name
++	}
++	-re "internal-error.*$::gdb_prompt $" {
++	    fail $gdb_test_name
++	}
++	-re "$::gdb_prompt $" {
++	    fail $gdb_test_name
++	}
++	eof {
++	    fail "$gdb_test_name (GDB died)"
++	    return
++	}
++    }
++
++    gdb_test "info threads" "No threads\\." "info threads after next failed"
++}
++
++# Cut points, per target-non-stop mode: NAME REGEXP NTH AFTER_RESUME.
++set cuts(off) {
++    {Z0-1 {^Z0,} 1 1}
++    {Z0-2 {^Z0,} 2 1}
++}
++set cuts(on) {
++    {Z0-1 {^Z0,} 1 1}
++    {register-write {^[GP]} 1 0}
++}
++
++foreach_with_prefix target_non_stop { off on } {
++    set remote_log [standard_output_file replay-$target_non_stop.log]
++
++    if { ![record_initial_logfile $remote_log $target_non_stop] } {
++	continue
++    }
++
++    set fd [open $remote_log]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    foreach cut $cuts($target_non_stop) {
++	lassign $cut name regexp nth after_resume
++	set last [cut_index $lines $regexp $nth $after_resume]
++	if { $last eq "" } {
++	    untested "no packet to cut at: $name"
++	    continue
++	}
++	set cut_log [standard_output_file replay-$target_non_stop-$name.log]
++	set fd [open $cut_log "w"]
++	foreach l [lrange $lines 0 $last] {
++	    puts $fd $l
++	}
++	close $fd
++	with_test_prefix "cut at $name" {
++	    replay_cut_log $cut_log $target_non_stop
++	}
++    }
++}

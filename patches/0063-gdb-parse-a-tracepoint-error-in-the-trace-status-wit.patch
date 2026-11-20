@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Tue, 17 Nov 2026 22:21:27 +0100
+Subject: [PATCH 63/76] gdb: parse a tracepoint error in the trace status
+ without a description
+
+"terror:41" sized an allocation from a null pointer.
+
+diff --git a/gdb/testsuite/gdb.replay/tstatus-malformed.exp b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+index 05a80573d0c..5797dee9d31 100644
+--- a/gdb/testsuite/gdb.replay/tstatus-malformed.exp
++++ b/gdb/testsuite/gdb.replay/tstatus-malformed.exp
+@@ -146,3 +146,20 @@ with_test_prefix "username not hex" {
+ 	    "the status has no username"
+     }
+ }
++
++# A tracepoint error with no description, only the number of the
++# tracepoint, so that the field has no second ':'.  GDB used to take
++# the length of the description from a null pointer.
++with_test_prefix "terror without description" {
++    if { [replay_with_reply $remote_log "T0;terror:41" ".*"] } {
++	set tfile [standard_output_file saved-terror.tf]
++
++	file delete $tfile
++	gdb_test "tsave $tfile" ".*" "tsave"
++
++	set contents [saved_trace_file $tfile]
++
++	gdb_assert { [regexp {(^|\n)status 0;terror::41(;|\n)} $contents] } \
++	    "the status has the tracepoint and no description"
++    }
++}
+diff --git a/gdb/tracepoint.c b/gdb/tracepoint.c
+index 3ef632dc21d..64ef476c7db 100644
+--- a/gdb/tracepoint.c
++++ b/gdb/tracepoint.c
+@@ -3307,14 +3307,17 @@ Status line: '%s'\n"), p, line);
+       else if (strncmp (p, stop_reason_names[tracepoint_error], p1 - p) == 0)
+ 	{
+ 	  p2 = strchr (++p1, ':');
+-	  if (p2 != p1)
++	  if (p2 == nullptr || p2 > p3)
+ 	    {
+-	      ts->stop_desc = hex_field_to_string (p1, p2);
++	      /* No description, only the number of the tracepoint.  */
++	      ts->stop_desc = xstrdup ("");
++	      p = unpack_varlen_hex (p1, &val);
+ 	    }
+ 	  else
+-	    ts->stop_desc = xstrdup ("");
+-
+-	  p = unpack_varlen_hex (++p2, &val);
++	    {
++	      ts->stop_desc = hex_field_to_string (p1, p2);
++	      p = unpack_varlen_hex (p2 + 1, &val);
++	    }
+ 	  ts->stopping_tracepoint = val;
+ 	  ts->stop_reason = tracepoint_error;
+ 	}

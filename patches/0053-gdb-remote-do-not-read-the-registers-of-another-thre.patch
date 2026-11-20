@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:39:47 +0100
+Subject: [PATCH 53/76] gdb/remote: do not read the registers of another thread
+ after a rejected Hg
+
+After the stub rejected an Hg, GDB read the registers of whichever thread the stub still had selected.
+
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 49f3d1735eb..2ca9dc477fa 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -9911,7 +9911,18 @@ remote_target::fetch_registers (struct regcache *regcache, int regnum)
+   int i;
+ 
+   set_remote_traceframe ();
+-  set_general_thread (regcache->ptid ());
++  if (!set_general_thread (regcache->ptid ()))
++    {
++      /* The stub has no such thread any more, e.g. because it has just
++	 exited.  Reading now would give the registers of whichever
++	 thread the stub has selected.  */
++      if (regnum >= 0)
++	regcache->raw_supply (regnum, nullptr);
++      else
++	for (i = 0; i < gdbarch_num_regs (gdbarch); i++)
++	  regcache->raw_supply (i, nullptr);
++      return;
++    }
+ 
+   if (regnum >= 0)
+     {
+@@ -10070,7 +10081,11 @@ remote_target::store_registers (struct regcache *regcache, int regnum)
+   int i;
+ 
+   set_remote_traceframe ();
+-  set_general_thread (regcache->ptid ());
++  /* If the stub has no such thread any more, do not write the
++     registers of whichever thread it has selected instead.  As for a
++     register we cannot write (see below), do not complain.  */
++  if (!set_general_thread (regcache->ptid ()))
++    return;
+ 
+   if (regnum >= 0)
+     {
+diff --git a/gdb/testsuite/gdb.replay/hg-rejected-registers.c b/gdb/testsuite/gdb.replay/hg-rejected-registers.c
+new file mode 100644
+index 00000000000..d50386adce2
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/hg-rejected-registers.c
+@@ -0,0 +1,42 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <pthread.h>
++#include <unistd.h>
++
++static pthread_barrier_t barrier;
++
++static void *
++thread_func (void *arg)
++{
++  pthread_barrier_wait (&barrier);
++  for (;;)
++    sleep (1);
++  return NULL;
++}
++
++int
++main (void)
++{
++  pthread_t thread;
++
++  pthread_barrier_init (&barrier, NULL, 2);
++  pthread_create (&thread, NULL, thread_func, NULL);
++  pthread_barrier_wait (&barrier);
++
++  return 0; /* break here */
++}
+diff --git a/gdb/testsuite/gdb.replay/hg-rejected-registers.exp b/gdb/testsuite/gdb.replay/hg-rejected-registers.exp
+new file mode 100644
+index 00000000000..8508e6adb07
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/hg-rejected-registers.exp
+@@ -0,0 +1,126 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test a stub that rejects the Hg packet with which GDB selects a
++# thread before reading its registers, as gdbserver does for a thread
++# it no longer knows.  GDB read the registers with 'g' all the same,
++# and got those of the thread the stub still had selected.  It must
++# show the registers as unavailable and not read them.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile \
++	  {debug pthreads}] } {
++    return
++}
++
++set bp_line [gdb_get_line_number "break here"]
++
++# Settings for recording and replaying alike.
++proc common_settings {} {
++    gdb_test_no_output "set sysroot"
++    gdb_test_no_output "maint set target-non-stop off"
++    gdb_test "break $::srcfile:$::bp_line" "Breakpoint $::decimal at .*"
++}
++
++# Run to the breakpoint through gdbserver and list the threads, which
++# reads the registers of thread 2, with a remote log in LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    common_settings
++
++    set res [gdbserver_start "" $::binfile]
++    set protocol [lindex $res 0]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd $protocol $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    gdb_test "continue" "Breakpoint $::decimal, main .*" \
++	"continue to the breakpoint"
++    gdb_test "info threads" "\\* 1 .*  2 .*" "list the threads"
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME, with the last Hg
++# rejected and the register read after it taken out.  Return true if
++# the packets were found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set h [lindex [lsearch -all -regexp $lines {^w \$Hgp[0-9a-f]+\.[0-9a-f]+#}] end]
++    if { $h eq "" } {
++	return false
++    }
++    if { ![regexp {^r \$OK} [lindex $lines [expr {$h + 1}]]]
++	 || ![regexp {^w \$g#} [lindex $lines [expr {$h + 2}]]] } {
++	return false
++    }
++
++    # gdbreplay adds the checksum.
++    set lines [lreplace $lines [expr {$h + 1}] [expr {$h + 3}] "r \$E01"]
++
++    set fd [open $out_filename "w"]
++    foreach l $lines {
++	puts $fd $l
++    }
++    close $fd
++    return true
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++if { ![make_replay_log $remote_log $modified_log] } {
++    fail "couldn't make the replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++common_settings
++
++set res [gdbreplay_start $modified_log]
++set protocol [lindex $res 0]
++set port [lindex $res 1]
++
++gdb_test "target $protocol $port" "Remote debugging using .*" "connect"
++gdb_test "continue" "Breakpoint $decimal, main .*" \
++    "continue to the breakpoint"
++gdb_test "info threads" \
++    [multi_line \
++	 "\\* 1 +\[^\r\n\]+ main \\(\\) at \[^\r\n\]+" \
++	 "  2 +\[^\r\n\]+ <unavailable> in \\?\\? \\(\\)"] \
++    "thread 2's registers are unavailable"

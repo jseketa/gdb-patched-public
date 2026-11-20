@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Sat, 7 Nov 2026 19:25:04 +0100
+Subject: [PATCH 09/76] gdb/testsuite: accept any shell's error in
+ non-existing-program.exp
+
+The test expected the POSIX shell's wording for a missing program; zsh and others word it differently.
+
+diff --git a/gdb/testsuite/gdb.server/non-existing-program.exp b/gdb/testsuite/gdb.server/non-existing-program.exp
+index 34a9f047a24..6729981cac6 100644
+--- a/gdb/testsuite/gdb.server/non-existing-program.exp
++++ b/gdb/testsuite/gdb.server/non-existing-program.exp
+@@ -47,8 +47,10 @@ expect {
+ 	exp_continue
+     }
+     # Likewise, but with startup-with-shell enabled, which is the
+-    # default behavior.
+-    -re "stdin/stdout redirected.*exec: non-existing-program: not found\r\nDuring startup program exited with code 127\.\r\nExiting\r\n" {
++    # default behavior.  Each shell words the error its own way, for
++    # example "exec: non-existing-program: not found" or "command not
++    # found: non-existing-program", over one line or more.
++    -re "stdin/stdout redirected.*non-existing-program\[^\r\n\]*\r\n.*During startup program exited with code 127\.\r\nExiting\r\n" {
+ 	set saw_exiting 1
+ 	exp_continue
+     }

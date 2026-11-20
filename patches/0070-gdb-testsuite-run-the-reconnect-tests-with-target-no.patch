@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Mon, 9 Nov 2026 17:36:51 +0100
+Subject: [PATCH 70/76] gdb/testsuite: run the reconnect tests with
+ target-non-stop on too
+
+The reconnect fixes only matter for a non-stop target, which no reconnect test used.
+
+diff --git a/gdb/testsuite/gdb.server/reconnect-ctrl-c.exp b/gdb/testsuite/gdb.server/reconnect-ctrl-c.exp
+index c0e129db76d..f05660d2ea3 100644
+--- a/gdb/testsuite/gdb.server/reconnect-ctrl-c.exp
++++ b/gdb/testsuite/gdb.server/reconnect-ctrl-c.exp
+@@ -25,26 +25,12 @@ require {!target_info exists gdb,nointerrupts}
+ 
+ standard_testfile
+ 
+-save_vars { GDBFLAGS } {
+-    # If GDB and GDBserver are both running locally, set the sysroot to avoid
+-    # reading files via the remote protocol.
+-    if { ![is_remote host] && ![is_remote target] } {
+-	set GDBFLAGS "$GDBFLAGS -ex \"set sysroot\""
+-    }
+-
+-    if {[prepare_for_testing "failed to prepare" $testfile $srcfile]} {
+-	return
+-    }
++if {[build_executable "failed to prepare" $testfile $srcfile]} {
++    return
+ }
+ 
+ set target_binfile [gdb_remote_download target $binfile]
+ 
+-# Make sure we're disconnected, in case we're testing with an
+-# extended-remote board, therefore already connected.
+-with_test_prefix "preparation" {
+-  gdb_test "disconnect" ".*"
+-}
+-
+ # Connect, continue, send Ctrl-C and expect a SIGINT stop.
+ 
+ proc connect_continue_ctrl_c {} {
+@@ -66,17 +52,44 @@ proc connect_continue_ctrl_c {} {
+     gdb_test "" "Program received signal SIGINT.*" "stop with control-c"
+ }
+ 
+-with_test_prefix "first" {
+-    # Start GDBserver.
+-    set gdbserver_reconnect_p 1
+-    set res [gdbserver_start "" $target_binfile]
+-    set gdbserver_protocol [lindex $res 0]
+-    set gdbserver_gdbport [lindex $res 1]
++# Run the test with "maint set target-non-stop TARGET_NON_STOP".  With
++# a target that is non-stop, the stops found at reconnect go through
++# a different path.
++
++proc run_test { target_non_stop } {
++    save_vars { ::GDBFLAGS } {
++	# If GDB and GDBserver are both running locally, set the sysroot to
++	# avoid reading files via the remote protocol.
++	if { ![is_remote host] && ![is_remote target] } {
++	    append ::GDBFLAGS " -ex \"set sysroot\""
++	}
++	append ::GDBFLAGS " -ex \"maint set target-non-stop $target_non_stop\""
++
++	clean_restart $::testfile
++    }
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    with_test_prefix "preparation" {
++	gdb_test "disconnect" ".*"
++    }
++
++    with_test_prefix "first" {
++	# Start GDBserver.
++	set ::gdbserver_reconnect_p 1
++	set res [gdbserver_start "" $::target_binfile]
++	set ::gdbserver_protocol [lindex $res 0]
++	set ::gdbserver_gdbport [lindex $res 1]
++
++	connect_continue_ctrl_c
++    }
+ 
+-    connect_continue_ctrl_c
++    with_test_prefix "second" {
++	gdb_test "disconnect" "Ending remote debugging."
++	connect_continue_ctrl_c
++    }
+ }
+ 
+-with_test_prefix "second" {
+-    gdb_test "disconnect" "Ending remote debugging."
+-    connect_continue_ctrl_c
++foreach_with_prefix target_non_stop {"off" "on"} {
++    run_test $target_non_stop
+ }
+diff --git a/gdb/testsuite/gdb.threads/reconnect-signal.exp b/gdb/testsuite/gdb.threads/reconnect-signal.exp
+index f7a66ac844d..0b011095f36 100644
+--- a/gdb/testsuite/gdb.threads/reconnect-signal.exp
++++ b/gdb/testsuite/gdb.threads/reconnect-signal.exp
+@@ -32,53 +32,66 @@ if { [gdb_compile_pthreads \
+     return
+ }
+ 
+-clean_restart $executable
++# Run the test with "maint set target-non-stop TARGET_NON_STOP".  With
++# a target that is non-stop, the stops found at reconnect go through
++# a different path.
++
++proc run_test { target_non_stop } {
++    save_vars { ::GDBFLAGS } {
++	append ::GDBFLAGS " -ex \"maint set target-non-stop $target_non_stop\""
++	clean_restart $::executable
++    }
+ 
+-if {![runto_main]} {
+-    return
+-}
++    if {![runto_main]} {
++	return
++    }
+ 
+-gdb_test "continue" "signal SIGUSR1.*" "continue to signal"
++    gdb_test "continue" "signal SIGUSR1.*" "continue to signal"
+ 
+-# Check that it's thread 2 that is selected.
+-gdb_test "info threads" "\\* 2 .*" "thread 2 is selected"
++    # Check that it's thread 2 that is selected.
++    gdb_test "info threads" "\\* 2 .*" "thread 2 is selected"
+ 
+-set msg "save \$pc after signal"
+-set saved_pc ""
+-gdb_test_multiple "print/x \$pc" $msg {
+-    -re "${::valnum_re} = (\[^\r\n\]*)\r\n$gdb_prompt $" {
+-	set saved_pc $expect_out(1,string)
+-	pass $msg
++    set msg "save \$pc after signal"
++    set saved_pc ""
++    gdb_test_multiple "print/x \$pc" $msg {
++	-re "${::valnum_re} = (\[^\r\n\]*)\r\n$::gdb_prompt $" {
++	    set saved_pc $expect_out(1,string)
++	    pass $msg
++	}
+     }
+-}
+ 
+-# Switch to the other thread.
+-gdb_test "thread 1" "thread 1.*" "switch to thread 1"
++    # Switch to the other thread.
++    gdb_test "thread 1" "thread 1.*" "switch to thread 1"
+ 
+-# Force GDB to select thread 1 on the remote end as well.
+-gdb_test "print/x \$pc"
++    # Force GDB to select thread 1 on the remote end as well.
++    gdb_test "print/x \$pc"
+ 
+-gdb_test "disconnect" "Ending remote debugging\\." "disconnect after signal"
++    gdb_test "disconnect" "Ending remote debugging\\." "disconnect after signal"
+ 
+-set test "reconnect after signal"
++    set test "reconnect after signal"
+ 
+-set res [gdb_reconnect]
+-if { [lindex $res 0] == 0 } {
+-    pass $test
+-} else {
+-    fail $test
+-    return
+-}
++    set res [gdb_reconnect]
++    if { [lindex $res 0] == 0 } {
++	pass $test
++    } else {
++	fail $test
++	return
++    }
+ 
+-# Check that thread 2 is re-selected.
+-gdb_test "info threads" "\\* 2 .*" "thread 2 is selected on reconnect"
++    # Check that thread 2 is re-selected.
++    gdb_test "info threads" "\\* 2 .*" "thread 2 is selected on reconnect"
+ 
+-# Check that the program is still alive, and stopped in the same spot.
+-gdb_test "print/x \$pc" "${::valnum_re} = $saved_pc" "check \$pc after signal"
++    # Check that the program is still alive, and stopped in the same spot.
++    gdb_test "print/x \$pc" "${::valnum_re} = $saved_pc" "check \$pc after signal"
+ 
+-# Check that we didn't lose the signal.
+-gdb_test "info program" "stopped with signal SIGUSR1,.*"
++    # Check that we didn't lose the signal.
++    gdb_test "info program" "stopped with signal SIGUSR1,.*"
+ 
+-# Nor does the program.
+-gdb_test "b handle" "Breakpoint .*" "set breakpoint in signal handler"
+-gdb_test "continue" "handle.*" "continue to signal handler"
++    # Nor does the program.
++    gdb_test "b handle" "Breakpoint .*" "set breakpoint in signal handler"
++    gdb_test "continue" "handle.*" "continue to signal handler"
++}
++
++foreach_with_prefix target_non_stop {"off" "on"} {
++    run_test $target_non_stop
++}

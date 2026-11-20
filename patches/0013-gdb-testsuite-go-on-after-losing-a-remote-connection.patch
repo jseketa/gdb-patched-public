@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Fri, 20 Nov 2026 16:39:08 +0100
+Subject: [PATCH 13/76] gdb/testsuite: go on after losing a remote connection
+ in one command
+
+New reconnect-in-command.exp: kill, detach, disconnect or connect again in the same command that lost the connection.
+
+diff --git a/gdb/testsuite/gdb.server/reconnect-in-command.exp b/gdb/testsuite/gdb.server/reconnect-in-command.exp
+new file mode 100644
+index 00000000000..66a6666d41c
+--- /dev/null
++++ b/gdb/testsuite/gdb.server/reconnect-in-command.exp
+@@ -0,0 +1,87 @@
++# This testcase is part of GDB, the GNU debugger.
++
++# Copyright 2026 Free Software Foundation, Inc.
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# A command that loses the remote connection and then, still in the
++# same command, goes on: here a Python command, as a script that
++# handles the failure would.  Killing, detaching from and
++# disconnecting from the program on the lost connection, and
++# connecting again (which kills it first), must work, and must not
++# make the Python command fail once the script has dealt with the loss.
++
++load_lib gdbserver-support.exp
++load_lib gdb-python.exp
++
++standard_testfile server.c
++
++require allow_gdbserver_tests allow_python_tests
++
++if {[build_executable $testfile.exp $testfile $srcfile debug] == -1} {
++    return
++}
++
++# Connect to a new GDBserver, then in one Python command: make
++# GDBserver exit ("monitor exit"; GDB notices at its next request,
++# here the stepi), and run CMD.  CMD may refer to $protocol and
++# $port2, the address of a second GDBserver, started if it does.
++
++proc test_after_loss { cmd } {
++    save_vars { ::GDBFLAGS } {
++	# If GDB and GDBserver are both running locally, set the sysroot
++	# to avoid reading files via the remote protocol.
++	if { ![is_remote host] && ![is_remote target] } {
++	    set ::GDBFLAGS "$::GDBFLAGS -ex \"set sysroot\""
++	}
++	clean_restart $::testfile
++    }
++    gdb_test "disconnect" ".*"
++    gdb_test_no_output "set confirm off"
++
++    set target_exec [gdbserver_download_current_prog]
++
++    set res [gdbserver_start "" $target_exec]
++    set protocol [lindex $res 0]
++    set port1 [lindex $res 1]
++    gdb_target_cmd $protocol $port1
++
++    if {[string match {*$port2*} $cmd]} {
++	set res [gdbserver_start "" $target_exec]
++	set port2 [lindex $res 1]
++    }
++    set name "lose the connection, then [lindex $cmd 0]"
++    set cmd [subst -nocommands $cmd]
++
++    gdb_test_multiline $name \
++	"python" "" \
++	"gdb.execute(\"monitor exit\")" "" \
++	"try:" "" \
++	"  gdb.execute(\"stepi\")" "" \
++	"except gdb.error as e:" "" \
++	"  print(\"lost: %s\" % e)" "" \
++	"gdb.execute(\"$cmd\")" "" \
++	"print(\"after: ok\")" "" \
++	"end" "(?:Remote connection closed|Target disconnected).*\r\nafter: ok"
++}
++
++foreach_with_prefix cmd { kill detach disconnect } {
++    test_after_loss $cmd
++    gdb_test "info threads" "No threads\\." "no threads left"
++}
++
++with_test_prefix "connect again" {
++    test_after_loss {target $protocol $port2}
++    gdb_test "info threads" "\\* 1 .*" "the program on the new connection"
++}

@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Wed, 18 Nov 2026 21:50:25 +0100
+Subject: [PATCH 55/76] gdb: drop an inferior's continuations when its process
+ is gone
+
+A non-stop attach that lost its connection left a continuation that ran at the next process's first stop.
+
+diff --git a/gdb/inferior.c b/gdb/inferior.c
+index 8c619ffec5a..e040d1b725a 100644
+--- a/gdb/inferior.c
++++ b/gdb/inferior.c
+@@ -194,6 +194,12 @@ inferior::do_all_continuations ()
+     }
+ }
+ 
++void
++inferior::clear_continuations ()
++{
++  m_continuations.clear ();
++}
++
+ /* Notify interpreters and observers that inferior INF was added.  */
+ 
+ static void
+@@ -333,6 +339,11 @@ exit_inferior (struct inferior *inf)
+   /* Reset it.  */
+   inf->control = inferior_control_state (NO_STOP_QUIETLY);
+ 
++  /* The continuations wait for a stop of the process that is gone.
++     Left in place, they would run at the next stop of whatever
++     process this inferior runs next.  */
++  inf->clear_continuations ();
++
+   /* Clear the register cache and the frame cache.  */
+   registers_changed ();
+   reinit_frame_cache ();
+diff --git a/gdb/inferior.h b/gdb/inferior.h
+index accd36740c3..cbf12c1f8da 100644
+--- a/gdb/inferior.h
++++ b/gdb/inferior.h
+@@ -535,6 +535,9 @@ class inferior : public refcounted_object,
+   void add_continuation (std::function<void ()> &&cont);
+   void do_all_continuations ();
+ 
++  /* Drop the continuations without calling them.  */
++  void clear_continuations ();
++
+   /* Set/get file name for default use for standard in/out in the inferior.
+ 
+      On Unix systems, we try to make TERMINAL_NAME the inferior's controlling
+diff --git a/gdb/testsuite/gdb.replay/attach-lost-then-run.c b/gdb/testsuite/gdb.replay/attach-lost-then-run.c
+new file mode 100644
+index 00000000000..8c0de4cbacf
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/attach-lost-then-run.c
+@@ -0,0 +1,27 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include <unistd.h>
++
++int
++main (void)
++{
++  alarm (60);
++  for (;;)
++    sleep (1);
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/attach-lost-then-run.exp b/gdb/testsuite/gdb.replay/attach-lost-then-run.exp
+new file mode 100644
+index 00000000000..671759a2791
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/attach-lost-then-run.exp
+@@ -0,0 +1,156 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# In non-stop mode, "attach" asks the target to stop the process and
++# leaves a continuation on the inferior, which finishes the attach
++# when the stop arrives.  Test losing the remote connection before
++# that stop, then running the program natively: the continuation was
++# left on the inferior and ran at the first stop of the new process,
++# setting it up a second time (an internal error in
++# post_create_inferior).
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++require can_spawn_for_attach
++require isnative
++require {!target_info exists use_gdb_stub}
++
++standard_testfile
++
++if { [prepare_for_testing "failed to prepare" $testfile $srcfile] } {
++    return
++}
++
++# Attach to a running process through gdbserver, non-stop, with a
++# remote log in LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    gdb_test_no_output "set sysroot"
++    gdb_test_no_output "set non-stop on"
++
++    set res [gdbserver_start "--multi" ""]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if {![gdb_target_cmd "extended-remote" $port] == 0} {
++	unsupported "couldn't start gdbserver"
++	return
++    }
++
++    set test_spawn_id [spawn_wait_for_attach $::binfile]
++    set pid [spawn_id_get_pid $test_spawn_id]
++
++    gdb_test "attach $pid" "Attaching to program: .*" "attach"
++    gdb_test "info threads" "\\* 1 .*" "the process stopped"
++    gdb_test "detach" ".*" "detach"
++
++    kill_wait_spawned_process $test_spawn_id
++    gdbserver_exit 0
++}
++
++# Copy the log in IN_FILENAME to OUT_FILENAME, ending it after the
++# packets GDB sends for "attach" up to the point where it waits for
++# the stop: the vAttach, the stop request (vCont;t), and the check of
++# the executable (qXfer:exec-file and vFile, up to vFile:close).  Stop
++# notifications are taken out, so that the stop never arrives.
++# Return the pid of the attach, or "" if the packets were not found.
++proc make_replay_log { in_filename out_filename } {
++    set fd [open $in_filename]
++    set lines [split [read $fd] "\n"]
++    close $fd
++
++    set a [lsearch -regexp $lines {^w \$vAttach;[0-9a-f]+#}]
++    if { $a == -1 } {
++	return ""
++    }
++    regexp {vAttach;([0-9a-f]+)#} [lindex $lines $a] -> pid
++
++    set t [lsearch -start $a -regexp $lines {^w \$vCont;t}]
++    if { $t == -1 } {
++	return ""
++    }
++    set c [lsearch -start $t -regexp $lines {^w \$vFile:close:}]
++    if { $c == -1 } {
++	return ""
++    }
++
++    set out {}
++    foreach l [lrange $lines 0 [expr {$c + 1}]] {
++	# A notification is logged in front of the reply that it came
++	# with; remove it, and the timeout note gdbreplay does not need.
++	regsub {^r (%Stop:[^#]*#..)+} $l {r } l
++	regsub {<Timeout: [0-9]+ seconds>$} $l {} l
++	if { $l ne "r " } {
++	    lappend out $l
++	}
++    }
++
++    set fd [open $out_filename "w"]
++    foreach l $out {
++	puts $fd $l
++    }
++    close $fd
++    return [expr 0x$pid]
++}
++
++set remote_log [standard_output_file replay.log]
++set modified_log [standard_output_file replay-modified.log]
++
++record_initial_logfile $remote_log
++
++set pid [make_replay_log $remote_log $modified_log]
++if { $pid eq "" } {
++    fail "couldn't make the replay log"
++    return
++}
++
++clean_restart $::testfile
++
++gdb_test "disconnect" ".*"
++gdb_test_no_output "set sysroot"
++gdb_test_no_output "set non-stop on"
++
++set res [gdbreplay_start $modified_log]
++set port [lindex $res 1]
++
++gdb_test "target extended-remote $port" "Remote debugging using .*" \
++    "connect"
++
++# The connection closes once the replay log is used up, while GDB
++# waits for the stop.
++gdb_test "attach $pid" "Attaching to program: .*" "attach"
++gdb_test "info inferiors" "\\* 1 +<null> .*" "the connection is gone"
++
++# Run the program natively.  The attach must not be finished at its
++# first stop.  (Extended-remote boards turn the native target off.)
++gdb_test_no_output "set auto-connect-native-target on"
++gdb_test "break main" "Breakpoint $decimal at .*"
++gdb_test "run" "Breakpoint $decimal, main \\(\\) .*" "run to main"
++gdb_test "info inferiors" "\\* 1 +process $decimal +$decimal \\(native\\) .*" \
++    "the program runs natively"
++
++gdb_test "kill" "\\\[Inferior 1 \\(process $decimal\\) killed\\\]" \
++    "kill the program" \
++    "Kill the program being debugged\\? \\(y or n\\) $" "y"

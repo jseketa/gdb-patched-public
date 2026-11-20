@@ -1,0 +1,266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Josip Seketa <josip.seketa@gmail.com>
+Date: Thu, 19 Nov 2026 01:52:01 +0100
+Subject: [PATCH 75/76] gdb/testsuite: test losing the remote connection during
+ run
+
+New test replays a run cut at chosen packets; run must end with the error and GDB stay alive.
+
+diff --git a/gdb/testsuite/gdb.replay/run-connection-closed.c b/gdb/testsuite/gdb.replay/run-connection-closed.c
+new file mode 100644
+index 00000000000..6a0e311ef41
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/run-connection-closed.c
+@@ -0,0 +1,22 @@
++/* This testcase is part of GDB, the GNU debugger.
++
++   Copyright 2026 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++int
++main (void)
++{
++  return 0;
++}
+diff --git a/gdb/testsuite/gdb.replay/run-connection-closed.exp b/gdb/testsuite/gdb.replay/run-connection-closed.exp
+new file mode 100644
+index 00000000000..10d14c1dafe
+--- /dev/null
++++ b/gdb/testsuite/gdb.replay/run-connection-closed.exp
+@@ -0,0 +1,224 @@
++# Copyright 2026 Free Software Foundation, Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 3 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Test that GDB survives the remote connection closing while "run" sets
++# up the new program over extended-remote.
++#
++# A real "run" session with gdbserver is recorded.  Then copies of the
++# log are made that end at a chosen packet from GDB, before the stub's
++# reply; gdbreplay closes the connection when its log ends.  The cut
++# points are the first qSymbol (looked up for the vDSO's symbols, whose
++# loader reported the lost connection as a warning and went on), the
++# close of the second file GDB reads (target_fileio_read_alloc, whose
++# close threw from a destructor), and each read of the dynamic linker
++# the second time GDB opens it (a failed read of its dynamic symbols
++# made GDB read past them).  For each, GDB must report an error and
++# stay alive.
++
++load_lib gdbserver-support.exp
++load_lib gdbreplay-support.exp
++
++require allow_gdbserver_tests
++require has_gdbreplay
++
++standard_testfile
++
++if { [build_executable "failed to build exec" $testfile $srcfile {debug}] } {
++    return
++}
++
++# Run the test program through gdbserver in extended mode, with the
++# remote log going to LOG_FILENAME.
++proc_with_prefix record_initial_logfile { log_filename } {
++    clean_restart $::testfile
++
++    # Make sure we're disconnected, in case we're testing with an
++    # extended-remote board, therefore already connected.
++    gdb_test "disconnect" ".*"
++
++    set res [gdbserver_start "--multi" ""]
++    set port [lindex $res 1]
++
++    gdb_test_no_output "set remotelogfile $log_filename" \
++	"setup remotelogfile"
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	unsupported "couldn't connect to gdbserver"
++	return false
++    }
++
++    gdb_test_no_output "set remote exec-file $::binfile"
++
++    # GDB reads the program's libraries through the target, which is
++    # slow.
++    set ok false
++    with_timeout_factor 6 {
++	gdb_test_multiple "run" "run the test program" {
++	    -re "\\\[Inferior 1 \\(process $::decimal\\) exited normally\\\]\r\n$::gdb_prompt $" {
++		pass $gdb_test_name
++		set ok true
++	    }
++	}
++    }
++
++    # The log is complete only once GDB closes it.
++    gdb_test "disconnect" ".*" "disconnect after recording"
++    gdbserver_exit 0
++
++    return $ok
++}
++
++# Return the packet part of a log line, that is the text between the
++# leading '$' and the '#' of the checksum, or the empty string.
++proc log_packet { line } {
++    if { [regexp {^[wr] \+?\$([^#]*)#} $line match payload] } {
++	return $payload
++    }
++    return ""
++}
++
++# Return the indexes of the lines of LINES that are packets GDB sent
++# after vRun, with their payloads.
++proc packets_after_run { lines } {
++    set result {}
++    set running false
++    for { set i 0 } { $i < [llength $lines] } { incr i } {
++	set line [lindex $lines $i]
++	if { ![regexp {^w } $line] } {
++	    continue
++	}
++	set payload [log_packet $line]
++	if { !$running } {
++	    set running [string match "vRun;*" $payload]
++	} else {
++	    lappend result $i $payload
++	}
++    }
++    return $result
++}
++
++# Return the cut points of the log LINES, as a list of NAME INDEX: the
++# index of the line of GDB's packet to end the log at.
++proc cut_points { lines } {
++    set cuts {}
++    set qsymbol 0
++    set closes 0
++    set opened {}
++    set reopened_fd ""
++    set reads 0
++    foreach { i payload } [packets_after_run $lines] {
++	if { [string match "qSymbol:*" $payload] && $qsymbol == 0 } {
++	    incr qsymbol
++	    lappend cuts "qSymbol" $i
++	} elseif { [regexp {^vFile:close:([0-9a-f]+)$} $payload -> fd] } {
++	    incr closes
++	    if { $closes == 2 } {
++		lappend cuts "vFile:close-2" $i
++	    }
++	    if { $fd eq $reopened_fd } {
++		set reopened_fd ""
++	    }
++	} elseif { [regexp {^vFile:open:([0-9a-f]+),} $payload -> name] } {
++	    if { [lsearch -exact $opened $name] != -1 && $reads == 0 } {
++		# The reply to this open gives the fd; find it below.
++		set reopened_fd "next"
++	    }
++	    lappend opened $name
++	} elseif { [regexp {^vFile:pread:([0-9a-f]+),} $payload -> fd] } {
++	    if { $reopened_fd eq "next" } {
++		set reopened_fd $fd
++	    }
++	    if { $fd eq $reopened_fd } {
++		incr reads
++		lappend cuts "reopened-pread-$reads" $i
++	    }
++	}
++    }
++    return $cuts
++}
++
++# Write the lines of LINES up to and including index LAST to
++# OUT_FILENAME.
++proc write_cut_log { lines out_filename last } {
++    set fd [open $out_filename "w"]
++    foreach l [lrange $lines 0 $last] {
++	puts $fd $l
++    }
++    close $fd
++}
++
++# Replay the log REMOTE_LOG, which ends early, and run the program.
++# GDB must report the lost connection with an error, and then still
++# answer commands.
++proc_with_prefix replay_cut_log { remote_log } {
++    clean_restart $::testfile
++
++    gdb_test "disconnect" ".*"
++
++    set res [gdbreplay_start $remote_log]
++    set port [lindex $res 1]
++
++    if { [gdb_target_cmd extended-remote $port] != 0 } {
++	fail "couldn't connect to gdbreplay"
++	return
++    }
++
++    gdb_test_no_output "set remote exec-file $::binfile"
++
++    # An internal error is not matched here, and makes the test fail.
++    with_timeout_factor 6 {
++	gdb_test_multiple "run" "run loses the connection" {
++	    -re "(Remote connection closed|Remote communication error\\.  Target disconnected: \[^\r\n\]*)\r\n.*$::gdb_prompt $" {
++		pass $gdb_test_name
++	    }
++	    -re "internal-error.*$::gdb_prompt $" {
++		fail $gdb_test_name
++	    }
++	    -re "$::gdb_prompt $" {
++		fail $gdb_test_name
++	    }
++	    eof {
++		fail "$gdb_test_name (GDB died)"
++		return
++	    }
++	}
++    }
++
++    gdb_test "info threads" "No threads\\." "info threads after run failed"
++}
++
++set remote_log [standard_output_file replay.log]
++
++if { ![record_initial_logfile $remote_log] } {
++    return
++}
++
++set fd [open $remote_log]
++set lines [split [read $fd] "\n"]
++close $fd
++
++set cuts [cut_points $lines]
++if { [llength $cuts] == 0 } {
++    untested "no packet to cut at"
++    return
++}
++
++foreach { name last } $cuts {
++    set cut_log [standard_output_file replay-$name.log]
++    write_cut_log $lines $cut_log $last
++    with_test_prefix "cut at $name" {
++	replay_cut_log $cut_log
++    }
++}
